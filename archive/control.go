@@ -93,6 +93,7 @@ type CodecIds struct {
 	recordingStarted                uint16
 	recordingProgress               uint16
 	recordingStopped                uint16
+	ping                            uint16
 }
 
 var codecIds CodecIds
@@ -115,6 +116,8 @@ func init() {
 	codecIds.recordingStarted = recordingStarted.SbeTemplateId()
 	codecIds.recordingProgress = recordingProgress.SbeTemplateId()
 	codecIds.recordingStopped = recordingStopped.SbeTemplateId()
+	// Ping (template 106, schema version 11) has no codec here; the client never needs its content.
+	codecIds.ping = 106
 }
 
 func controlFragmentHandler(context interface{}, buffer *atomic.Buffer, offset int32, length int32, header *logbuffer.Header) (action term.ControlledPollAction) {
@@ -205,6 +208,9 @@ func controlFragmentHandler(context interface{}, buffer *atomic.Buffer, offset i
 		logger.Debugf("controlFragmentHandler: ignoring RecordingDescriptor type %d", hdr.TemplateId)
 	case codecIds.recordingSubscriptionDescriptor:
 		logger.Debugf("controlFragmentHandler: ignoring RecordingSubscriptionDescriptor type %d", hdr.TemplateId)
+
+	case codecIds.ping:
+		logger.Debugf("controlFragmentHandler: ignoring Ping type %d", hdr.TemplateId)
 
 	default:
 		// This can happen when testing/adding new functionality
@@ -337,6 +343,9 @@ func ConnectionControlFragmentHandler(context *PollContext, buffer *atomic.Buffe
 		logger.Debugf("connectionControlFragmentHandler: ignoring RecordingSubscriptionDescriptor type %d", hdr.TemplateId)
 	case codecIds.recordingSignalEvent:
 		logger.Debugf("connectionControlFragmentHandler: ignoring recordingSignalEvent type %d", hdr.TemplateId)
+
+	case codecIds.ping:
+		logger.Debugf("connectionControlFragmentHandler: ignoring Ping type %d", hdr.TemplateId)
 
 	default:
 		fmt.Printf("ConnectionControlFragmentHandler: Insert decoder for type: %d", hdr.TemplateId)
@@ -501,16 +510,16 @@ func (control *Control) errorResponseFragmentHandler(buffer *atomic.Buffer, offs
 				pollContext.control.archive.Listeners.ErrorListener(err2)
 			}
 		}
-		if pollContext.control.archive.Listeners.RecordingSignalListener != nil {
-			pollContext.control.archive.Listeners.RecordingSignalListener(rse)
-		}
-
+		// Only our own session's signals are ours; once, not twice.
 		if rse.ControlSessionId == pollContext.control.archive.SessionID {
 			// We can call the async callback if it exists
 			if pollContext.control.archive.Listeners.RecordingSignalListener != nil {
 				pollContext.control.archive.Listeners.RecordingSignalListener(rse)
 			}
 		}
+
+	case codecIds.ping:
+		logger.Debugf("errorResponseFragmentHandler: ignoring Ping type %d", hdr.TemplateId)
 
 	default:
 		fmt.Printf("errorResponseFragmentHandler: Insert decoder for type: %d", hdr.TemplateId)
@@ -597,9 +606,15 @@ func (control *Control) onFragment(
 			}
 			return term.ControlledPollActionContinue
 		}
+		if control.archive.Listeners.RecordingSignalListener != nil {
+			control.archive.Listeners.RecordingSignalListener(recordingSignalEvent)
+		}
+
+	case codecIds.ping:
+		logger.Debugf("onFragment: ignoring Ping type %d", hdr.TemplateId)
 
 	default:
-		logger.Debug("descriptorFragmentHandler: Insert decoder for type: %d", hdr.TemplateId)
+		logger.Debugf("onFragment: Insert decoder for type: %d", hdr.TemplateId)
 	}
 	return term.ControlledPollActionContinue
 }
