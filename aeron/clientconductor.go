@@ -1169,35 +1169,47 @@ func (cc *ClientConductor) CounterReader() *ctr.Reader {
 func (cc *ClientConductor) closeAllResources(now int64) {
 	var err error
 	if cc.running.CompareAndSet(true, false) {
-		for _, pub := range cc.pubs {
+		// cc.pubs, cc.subs and cc.counters are guarded by adminLock (the driver event callbacks and the Add* calls
+		// take it), so detach them under the lock. The Close calls happen outside it: they call back into the
+		// conductor, which takes adminLock itself.
+		cc.adminLock.Lock()
+		pubs, subs, counterDefs := cc.pubs, cc.subs, cc.counters
+		cc.pubs, cc.subs, cc.counters = nil, nil, nil
+		var pubsToClose []*Publication
+		for _, pub := range pubs {
 			if pub != nil && pub.publication != nil {
-				err = pub.publication.Close()
-				if err != nil {
-					cc.onError(err)
-				}
+				pubsToClose = append(pubsToClose, pub.publication)
 			}
 		}
-		cc.pubs = nil
-
-		for _, sub := range cc.subs {
+		var subsToClose []*Subscription
+		for _, sub := range subs {
 			if sub != nil && sub.subscription != nil {
-				err = sub.subscription.Close()
-				if err != nil {
-					cc.onError(err)
-				}
+				subsToClose = append(subsToClose, sub.subscription)
 			}
 		}
-		cc.subs = nil
-
-		for _, counterDef := range cc.counters {
+		var countersToClose []*Counter
+		for _, counterDef := range counterDefs {
 			if counterDef != nil && counterDef.counter != nil {
-				err = counterDef.counter.Close()
-				if err != nil {
-					cc.onError(err)
-				}
+				countersToClose = append(countersToClose, counterDef.counter)
 			}
 		}
-		cc.counters = nil
+		cc.adminLock.Unlock()
+
+		for _, pub := range pubsToClose {
+			if err = pub.Close(); err != nil {
+				cc.onError(err)
+			}
+		}
+		for _, sub := range subsToClose {
+			if err = sub.Close(); err != nil {
+				cc.onError(err)
+			}
+		}
+		for _, counter := range countersToClose {
+			if err = counter.Close(); err != nil {
+				cc.onError(err)
+			}
+		}
 	}
 }
 
