@@ -46,6 +46,10 @@ type Options struct {
 	AuthResponse           []uint8            // [init] The challengeResponse we should provide
 }
 
+// DefaultPollInterval is how long the default IdleStrategy sleeps between polls of the control response stream
+// when nothing arrived. It is the latency floor of every synchronous Archive call (connect, replay start, purge...).
+const DefaultPollInterval = 50 * time.Millisecond
+
 // These are the Options used by default for an Archive object
 var defaultOptions = Options{
 	RequestChannel:         "aeron:udp?endpoint=localhost:8010",
@@ -57,12 +61,18 @@ var defaultOptions = Options{
 	ArchiveLoglevel:        zapcore.WarnLevel,
 	AeronLoglevel:          zapcore.WarnLevel,
 	Timeout:                time.Second * 5,
-	IdleStrategy:           idlestrategy.Sleeping{SleepFor: time.Millisecond * 50}, // FIXME: tune
+	IdleStrategy:           idlestrategy.Sleeping{SleepFor: DefaultPollInterval},
 	RangeChecking:          false,
 	AuthEnabled:            false,
 	AuthCredentials:        nil,
 	AuthChallenge:          nil,
 	AuthResponse:           nil,
+}
+
+// SetPollInterval makes the Archive client sleep d (instead of DefaultPollInterval) between polls when idle. It
+// replaces IdleStrategy with a sleeping one, so call it before assigning a custom IdleStrategy, not after.
+func (o *Options) SetPollInterval(d time.Duration) {
+	o.IdleStrategy = idlestrategy.Sleeping{SleepFor: d}
 }
 
 // DefaultOptions creates and returns a new Options from the defaults.
