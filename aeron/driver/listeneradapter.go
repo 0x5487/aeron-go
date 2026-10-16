@@ -106,6 +106,11 @@ func NewAdapter(driverListener Listener, broadcastReceiver *broadcast.CopyReceiv
 }
 
 func (adapter *ListenerAdapter) ReceiveMessages() int {
+	return adapter.broadcastReceiver.Receive(adapter.handler())
+}
+
+// handler returns the message handler; split out of ReceiveMessages so that tests can feed events directly.
+func (adapter *ListenerAdapter) handler() broadcast.Handler {
 	handler := func(msgTypeID int32, buffer *atomic.Buffer, offset int32, length int32) {
 		logger.Debugf("received %d", msgTypeID)
 		switch int32(msgTypeID) {
@@ -224,10 +229,11 @@ func (adapter *ListenerAdapter) ReceiveMessages() int {
 
 			adapter.listener.OnClientTimeout(msg.clientID.Get())
 		default:
-			// Note: Java silently ignores unhandled events
-			logger.Fatalf("received unhandled %d", msgTypeID)
+			// Java silently ignores unhandled events. Drivers from 1.49.0 on broadcast ON_NEXT_AVAILABLE_SESSION_ID
+			// (0x0F0D) to every client, and the original Fatalf killed the process (trading-poc experiment 01).
+			logger.Warningf("ignoring unhandled driver event %d", msgTypeID)
 		}
 	}
 
-	return adapter.broadcastReceiver.Receive(handler)
+	return handler
 }
