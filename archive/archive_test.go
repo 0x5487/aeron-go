@@ -100,8 +100,10 @@ func TestMain(m *testing.M) {
 
 	archive, err = NewArchive(options, context)
 	if err != nil || archive == nil {
-		log.Printf("archive-media-driver connection failed, skipping all archive_tests:%s", err.Error())
-		return
+		// Tests that need a live archive check haveArchive and return early; the unit tests that use mocks must
+		// still run (they used to be skipped silently along with the rest).
+		log.Printf("archive-media-driver connection failed, only the tests that do not need a driver run: %v", err)
+		os.Exit(m.Run())
 	}
 	haveArchive = true
 

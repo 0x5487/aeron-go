@@ -134,6 +134,8 @@ func TestControl_PollForErrorResponse(t *testing.T) {
 }
 
 func mockPollResponses(t *testing.T, image *aeron.MockImage, responses ...encodable) {
+	// Subscription.IsConnected, called by PollForErrorResponse, asks every image.
+	image.On("IsClosed").Return(false).Maybe()
 	poll := image.On("Poll", mock.Anything, mock.Anything)
 	poll.Maybe()
 	poll.Run(func(args mock.Arguments) {
@@ -209,6 +211,7 @@ func newTestControl(t *testing.T) (*Control, *aeron.MockImage) {
 	c.fragmentAssembler = aeron.NewControlledFragmentAssembler(
 		c.onFragment, aeron.DefaultFragmentAssemblyBufferLength,
 	)
+	c.errorFragmentHandler = c.errorResponseFragmentHandler
 	return c, image
 }
 
