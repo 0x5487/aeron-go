@@ -18,7 +18,6 @@ limitations under the License.
 package aeron
 
 import (
-	"fmt"
 
 	"github.com/lirm/aeron-go/aeron/atomic"
 	"github.com/lirm/aeron-go/aeron/logbuffer"
@@ -38,6 +37,10 @@ const (
 	PublicationClosed int64 = -4
 	// MaxPositionExceeded indicates that ...
 	MaxPositionExceeded int64 = -5
+	// MessageTooLong indicates that the message is larger than MaxMessageLength (term length / 8) and can never be
+	// sent on this Publication. Unlike BackPressured it is not retryable. Java throws IllegalArgumentException
+	// here; aeron-go used to panic.
+	MessageTooLong int64 = -6
 )
 
 // Publication is a sender structure
@@ -171,6 +174,9 @@ func (pub *Publication) Offer(buffer *atomic.Buffer, offset int32, length int32,
 	if pub.IsClosed() {
 		return PublicationClosed
 	}
+	if pub.exceedsMaxMessageLength(length) {
+		return MessageTooLong
+	}
 
 	if reservedValueSupplier == nil {
 		reservedValueSupplier = term.DefaultReservedValueSupplier
@@ -199,7 +205,6 @@ func (pub *Publication) Offer(buffer *atomic.Buffer, offset int32, length int32,
 	if length <= pub.maxPayloadLength {
 		resultingOffset, termId = termAppender.AppendUnfragmentedMessage(buffer, offset, length, reservedValueSupplier)
 	} else {
-		pub.checkForMaxMessageLength(length)
 		resultingOffset, termId = termAppender.AppendFragmentedMessage(buffer, offset, length, pub.maxPayloadLength, reservedValueSupplier)
 	}
 
@@ -221,10 +226,14 @@ func (pub *Publication) Offer2(
 	}
 	length := lengthOne + lengthTwo
 	if length < 0 {
-		panic(fmt.Sprintf("Length overflow (lengthOne: %d lengthTwo: %d)", lengthOne, lengthTwo))
+		// lengthOne + lengthTwo overflowed int32
+		return MessageTooLong
 	}
 	if pub.IsClosed() {
 		return PublicationClosed
+	}
+	if pub.exceedsMaxMessageLength(length) {
+		return MessageTooLong
 	}
 
 	if reservedValueSupplier == nil {
@@ -258,7 +267,6 @@ func (pub *Publication) Offer2(
 			bufferTwo, offsetTwo, lengthTwo,
 			reservedValueSupplier)
 	} else {
-		pub.checkForMaxMessageLength(length)
 		resultingOffset, termId = termAppender.AppendFragmentedMessage2(
 			bufferOne, offsetOne, lengthOne,
 			bufferTwo, offsetTwo, lengthTwo,
@@ -297,7 +305,9 @@ func (pub *Publication) TryClaim(length int32, bufferClaim *logbuffer.Claim) int
 	if pub.IsClosed() {
 		return PublicationClosed
 	}
-	pub.checkForMaxPayloadLength(length)
+	if length > pub.maxPayloadLength {
+		return MessageTooLong
+	}
 
 	limit := pub.pubLimit.get()
 	termCount := pub.metaData.ActiveTermCountOff.Get()
@@ -316,16 +326,14 @@ func (pub *Publication) TryClaim(length int32, bufferClaim *logbuffer.Claim) int
 	}
 }
 
-func (pub *Publication) checkForMaxMessageLength(length int32) {
-	if length > pub.maxMessageLength {
-		panic(fmt.Sprintf("Encoded message exceeds maxMessageLength of %d, length=%d", pub.maxMessageLength, length))
-	}
+// MaxMessageLength is the largest message Offer accepts: term length / 8, including any header the caller
+// prepends with Offer2.
+func (pub *Publication) MaxMessageLength() int32 {
+	return pub.maxMessageLength
 }
 
-func (pub *Publication) checkForMaxPayloadLength(length int32) {
-	if length > pub.maxPayloadLength {
-		panic(fmt.Sprintf("Encoded message exceeds maxPayloadLength of %d, length=%d", pub.maxPayloadLength, length))
-	}
+func (pub *Publication) exceedsMaxMessageLength(length int32) bool {
+	return length > pub.maxMessageLength
 }
 
 func computeTermBeginPosition(activeTermID, positionBitsToShift, initialTermID int32) int64 {

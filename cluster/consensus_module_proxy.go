@@ -113,7 +113,8 @@ func (proxy *consensusModuleProxy) offer(buffer *atomic.Buffer, offset, length i
 		result = proxy.publication.Offer(buffer, offset, length, nil)
 		if result >= 0 {
 			break
-		} else if result == aeron.NotConnected || result == aeron.PublicationClosed || result == aeron.MaxPositionExceeded {
+		} else if result == aeron.NotConnected || result == aeron.PublicationClosed || result == aeron.MaxPositionExceeded ||
+			result == aeron.MessageTooLong {
 			panic(fmt.Sprintf("offer failed, result=%d", result))
 		}
 	}
@@ -127,7 +128,8 @@ func (proxy *consensusModuleProxy) Offer2(
 	var result int64
 	for i := 0; i < 3; i++ {
 		result = proxy.publication.Offer2(bufferOne, offsetOne, lengthOne, bufferTwo, offsetTwo, lengthTwo, nil)
-		if result >= 0 {
+		if result >= 0 || result == aeron.MessageTooLong {
+			// MessageTooLong never succeeds on retry: hand the code to the caller (Cluster.Offer) instead of panicking.
 			break
 		} else if result == aeron.NotConnected || result == aeron.PublicationClosed || result == aeron.MaxPositionExceeded {
 			panic(fmt.Sprintf("offer failed, result=%d", result))

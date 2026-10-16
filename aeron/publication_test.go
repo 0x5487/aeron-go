@@ -172,3 +172,47 @@ func TestPublication_Offer(t *testing.T) {
 	assert.Equalf(t, pos, AdminAction,
 		"Expected publication to trigger AdminAction (%d)", pos)
 }
+
+// TestPublication_OfferOversize: a message over the single-message limit (term length / 8) gets an error code, not a
+// panic; a message exactly at the limit is accepted. The code differs from BackPressured so callers can tell a
+// retryable condition from one that never succeeds (trading-poc experiment 04).
+func TestPublication_OfferOversize(t *testing.T) {
+	lb, err := logbuffer.NewTestingLogbuffer()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, logbuffer.RemoveTestingLogbufferFile()) })
+
+	pub := NewTestingPublication(lb, 4096, 1<<30)
+	max := pub.MaxMessageLength()
+	require.Greater(t, max, int32(4096), "limit must need fragmentation for the test to cover that path")
+
+	tests := []struct {
+		name  string
+		offer func(length int32) int64
+	}{
+		{"Offer", func(n int32) int64 {
+			return pub.Offer(atomic.MakeBuffer(make([]byte, n)), 0, n, nil)
+		}},
+		{"Offer2", func(n int32) int64 {
+			hdr := atomic.MakeBuffer(make([]byte, 32))
+			body := n - 32
+			return pub.Offer2(hdr, 0, 32, atomic.MakeBuffer(make([]byte, body)), 0, body, nil)
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var atLimit, over int64
+			require.NotPanics(t, func() { atLimit = tt.offer(max) })
+			assert.Greater(t, atLimit, int64(0), "payload at the limit must be accepted")
+			require.NotPanics(t, func() { over = tt.offer(max + 1) })
+			assert.Equal(t, MessageTooLong, over)
+			assert.NotEqual(t, BackPressured, over)
+		})
+	}
+
+	t.Run("TryClaim", func(t *testing.T) {
+		var claim logbuffer.Claim
+		var res int64
+		require.NotPanics(t, func() { res = pub.TryClaim(pub.maxPayloadLength+1, &claim) })
+		assert.Equal(t, MessageTooLong, res)
+	})
+}
