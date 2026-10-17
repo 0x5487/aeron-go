@@ -41,6 +41,7 @@ type Context struct {
 	resourceLingerTo        time.Duration
 	publicationConnectionTo time.Duration
 	interServiceTo          time.Duration
+	interServiceSet         bool
 
 	idleStrategy idlestrategy.Idler
 }
@@ -92,10 +93,20 @@ func (ctx *Context) ResourceLingerTimeout(to time.Duration) *Context {
 	return ctx
 }
 
-// InterServiceTimeout sets the timeout for client heartbeat
+// InterServiceTimeout sets the timeout for client heartbeat: how long the client conductor may go without running before it
+// stops itself. Left unset, the conductor uses the driver's client liveness timeout, which it reads from the CnC file.
 func (ctx *Context) InterServiceTimeout(to time.Duration) *Context {
 	ctx.interServiceTo = to
+	ctx.interServiceSet = true
 	return ctx
+}
+
+// interServiceTimeout is the timeout the conductor uses: the one set on the Context, otherwise the driver's.
+func (ctx *Context) interServiceTimeout(driverClientLiveness time.Duration) time.Duration {
+	if ctx.interServiceSet {
+		return ctx.interServiceTo
+	}
+	return driverClientLiveness
 }
 
 func (ctx *Context) PublicationConnectionTimeout(to time.Duration) *Context {
