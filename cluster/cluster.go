@@ -17,6 +17,14 @@ type Cluster interface {
 	// Role returns the role the cluster node is playing
 	Role() Role
 
+	// ElectionState returns the consensus module's election state for this cluster and whether it could be read at all.
+	//
+	// The state is read from the consensus module's election state counter (type ELECTION_STATE_TYPE_ID, keyed by this
+	// cluster's id) on every call; it is never cached, so a restarted consensus module is followed. ok is false when the
+	// counter is not there (yet): the state is unknown then, which is not CLOSED, and a service that answers only in
+	// CLOSED must answer NOT_READY. See ElectionState in election_state.go.
+	ElectionState() (ElectionState, bool)
+
 	// Time returns the cluster time as time units since 1 Jan 1970 UTC
 	Time() int64
 

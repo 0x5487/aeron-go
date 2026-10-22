@@ -30,3 +30,8 @@ it was made and where it was found (trading-poc experiments under `docs/labs/aer
   polls was a literal and the latency floor of every synchronous Archive call; the default stays 50 ms.
 - **aeron**: `Context.InterServiceTimeout` reaches the client conductor (28c3dd0); unset, the driver's client liveness
   timeout still applies.
+- **cluster**: `ClusteredServiceAgent.ElectionState` reads the consensus module's election state counter
+  (`ELECTION_STATE_TYPE_ID`, keyed by cluster id) and reports "unknown" when there is no such counter. The trading-poc
+  query gate (cloud-prep 67) answers only while the election is `CLOSED`, so it asks on every request instead of keeping
+  a copy; a restarted consensus module may re-create the counter, so no counter id is kept either. Found in trading-poc
+  lab `docs/labs/aeron/11-election-state-query-gate.md` (V4).
