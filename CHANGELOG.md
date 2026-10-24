@@ -35,3 +35,13 @@ it was made and where it was found (trading-poc experiments under `docs/labs/aer
   query gate (cloud-prep 67) answers only while the election is `CLOSED`, so it asks on every request instead of keeping
   a copy; a restarted consensus module may re-create the counter, so no counter id is kept either. Found in trading-poc
   lab `docs/labs/aeron/11-election-state-query-gate.md` (V4).
+
+### Changed
+
+- **idlestrategy**: `Busy` is renamed to `NoOp`, the Java `NoOpIdleStrategy` it always was, and `BusySpin` is added as
+  the Java `BusySpinIdleStrategy`: an idle round executes one CPU spin-wait hint (`PAUSE` on amd64, `YIELD` on arm64,
+  an empty function on every other architecture) and returns. `BackoffIdleStrategy`'s spinning state calls the same
+  hint instead of only counting spins, replacing the `We should call procyield here` TODO. Found in trading-poc
+  `docs/tickets/cloud-perf/issues/10-explicit-idle-strategy.md` (second cloud round): the Go backoff's spin phase never
+  told the CPU it was spinning, and the fork had no counterpart of `BusySpinIdleStrategy` to compare against. The old
+  name is not aliased (trading-poc is pre-release, AGENTS.md §1.3); the examples use `NoOp`.

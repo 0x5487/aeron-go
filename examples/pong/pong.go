@@ -115,7 +115,7 @@ func main() {
 	}
 
 	go func() {
-		idleStrategy := idlestrategy.Busy{}
+		idleStrategy := idlestrategy.NoOp{}
 		for {
 			fragmentsRead := subscription.Poll(handler, 10)
 			idleStrategy.Idle(fragmentsRead)

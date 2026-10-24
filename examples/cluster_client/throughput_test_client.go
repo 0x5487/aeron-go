@@ -75,7 +75,7 @@ func main() {
 
 	opts := client.NewOptions()
 	if idleStr := os.Getenv("NO_OP_IDLE"); idleStr != "" {
-		opts.IdleStrategy = &idlestrategy.Busy{}
+		opts.IdleStrategy = &idlestrategy.NoOp{}
 	}
 	opts.IngressChannel = "aeron:udp?alias=cluster-client-ingress|endpoint=localhost:20000"
 	opts.IngressEndpoints = "0=localhost:20000,1=localhost:21000,2=localhost:22000"

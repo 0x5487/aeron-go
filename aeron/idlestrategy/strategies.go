@@ -25,11 +25,20 @@ type Idler interface {
 	Idle(fragmentsRead int)
 }
 
-type Busy struct {
+// NoOp is the Java NoOpIdleStrategy: an idle round returns at once, doing nothing at all.
+type NoOp struct {
 }
 
-func (s Busy) Idle(fragmentsRead int) {
+func (s NoOp) Idle(fragmentsRead int) {
+}
 
+// BusySpin is the Java BusySpinIdleStrategy: an idle round executes one CPU spin-wait hint (a PAUSE on amd64, a YIELD
+// on arm64) and returns, leaving the goroutine on the CPU. Unlike NoOp it tells the CPU that the goroutine is spinning.
+type BusySpin struct {
+}
+
+func (s BusySpin) Idle(fragmentsRead int) {
+	spinWait()
 }
 
 type Sleeping struct {

@@ -124,7 +124,7 @@ func main() {
 
 	opts := cluster.NewOptions()
 	if idleStr := os.Getenv("NO_OP_IDLE"); idleStr != "" {
-		opts.IdleStrategy = &idlestrategy.Busy{}
+		opts.IdleStrategy = &idlestrategy.NoOp{}
 	}
 	if opts.ClusterDir = os.Getenv("CLUSTER_DIR"); opts.ClusterDir == "" {
 		opts.ClusterDir = "/tmp/aeron-go-poc/cluster"

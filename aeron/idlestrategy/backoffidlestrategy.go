@@ -85,7 +85,10 @@ func (s *BackoffIdleStrategy) idle() {
 		s.state = backoffSpinning
 		s.spins++
 	case backoffSpinning:
-		// We should call procyield here, see https://golang.org/src/runtime/lock_futex.go
+		// The spinning state tells the CPU that the goroutine is spinning, as Java's BackoffIdleStrategy does with
+		// Thread.onSpinWait. The state changes stay where they were: the spin that takes spins past maxSpins is the
+		// one that moves to the yielding state.
+		spinWait()
 		s.spins++
 		if s.spins > s.maxSpins {
 			s.state = backoffYielding
