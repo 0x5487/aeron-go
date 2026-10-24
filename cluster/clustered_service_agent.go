@@ -100,14 +100,8 @@ func NewClusteredServiceAgent(
 	if err != nil {
 		return nil, err
 	}
-	serviceAdapter := &serviceAdapter{
-		marshaller:   codecs.NewSbeGoMarshaller(),
-		subscription: sub,
-	}
-	logAdapter := &boundedLogAdapter{
-		marshaller: codecs.NewSbeGoMarshaller(),
-		options:    options,
-	}
+	serviceAdapter := newServiceAdapter(sub)
+	logAdapter := newBoundedLogAdapter(options)
 
 	counterFile, _, _ := counters.MapFile(aeronCtx.CncFileName())
 	countersReader := counters.NewReader(

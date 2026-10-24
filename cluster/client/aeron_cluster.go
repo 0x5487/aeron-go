@@ -25,6 +25,7 @@ import (
 	"github.com/lirm/aeron-go/aeron"
 	"github.com/lirm/aeron-go/aeron/atomic"
 	"github.com/lirm/aeron-go/aeron/logbuffer"
+	"github.com/lirm/aeron-go/aeron/logbuffer/term"
 	"github.com/lirm/aeron-go/aeron/logging"
 	"github.com/lirm/aeron-go/aeron/util"
 	"github.com/lirm/aeron-go/cluster"
@@ -47,6 +48,7 @@ type AeronCluster struct {
 	leaderMemberId       int32
 	memberByIdMap        map[int32]*memberIngress
 	fragmentAssembler    *aeron.FragmentAssembler
+	egressHandler        term.FragmentHandler // ac.fragmentAssembler.OnFragment, bound in bindEgressHandler
 	egressListener       EgressListener
 	sessionMsgHdrBuffer  *atomic.Buffer
 	keepAliveBuffer      *atomic.Buffer
@@ -124,7 +126,7 @@ func NewAeronCluster(
 		sessionMsgHdrBuffer: sessionMsgHdrBuf,
 		keepAliveBuffer:     codecs.MakeClusterMessageBuffer(cluster.SessionKeepAliveTemplateId, 16),
 	}
-	client.fragmentAssembler = aeron.NewFragmentAssembler(client.onFragment, 0)
+	client.bindEgressHandler()
 	client.updateMemberEndpoints(options.IngressEndpoints)
 
 	return client, nil
@@ -385,8 +387,15 @@ func (ac *AeronCluster) sendConnectRequest(responseChannel string) error {
 	}
 }
 
+// bindEgressHandler creates the egress fragment assembler and stores its handler, bound once. Passing
+// ac.fragmentAssembler.OnFragment to Poll on every round allocates a closure per round.
+func (ac *AeronCluster) bindEgressHandler() {
+	ac.fragmentAssembler = aeron.NewFragmentAssembler(ac.onFragment, 0)
+	ac.egressHandler = ac.fragmentAssembler.OnFragment
+}
+
 func (ac *AeronCluster) pollEgress(fragmentLimit int) int {
-	return ac.egressSub.Poll(ac.fragmentAssembler.OnFragment, fragmentLimit)
+	return ac.egressSub.Poll(ac.egressHandler, fragmentLimit)
 }
 
 func (ac *AeronCluster) onFragment(buffer *atomic.Buffer, offset, length int32, header *logbuffer.Header) {

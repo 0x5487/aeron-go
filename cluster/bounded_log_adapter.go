@@ -17,6 +17,7 @@ import (
 	"github.com/lirm/aeron-go/aeron"
 	"github.com/lirm/aeron-go/aeron/atomic"
 	"github.com/lirm/aeron-go/aeron/logbuffer"
+	"github.com/lirm/aeron-go/aeron/logbuffer/term"
 	"github.com/lirm/aeron-go/cluster/codecs"
 )
 
@@ -33,6 +34,15 @@ type boundedLogAdapter struct {
 	image          aeron.Image
 	builder        *bytes.Buffer
 	maxLogPosition int64
+	// fragmentHandler is adapter.onFragment, bound once in newBoundedLogAdapter. Passing the method value to
+	// BoundedPoll on every round allocates a closure per round.
+	fragmentHandler term.FragmentHandler
+}
+
+func newBoundedLogAdapter(options *Options) *boundedLogAdapter {
+	adapter := &boundedLogAdapter{marshaller: codecs.NewSbeGoMarshaller(), options: options}
+	adapter.fragmentHandler = adapter.onFragment
+	return adapter
 }
 
 func (adapter *boundedLogAdapter) isDone() bool {
@@ -42,7 +52,7 @@ func (adapter *boundedLogAdapter) isDone() bool {
 }
 
 func (adapter *boundedLogAdapter) poll(limitPos int64) int {
-	return adapter.image.BoundedPoll(adapter.onFragment, limitPos, adapter.options.LogFragmentLimit)
+	return adapter.image.BoundedPoll(adapter.fragmentHandler, limitPos, adapter.options.LogFragmentLimit)
 }
 
 func (adapter *boundedLogAdapter) onFragment(

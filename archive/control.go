@@ -38,8 +38,22 @@ type Control struct {
 
 	archive           *Archive // link to parent
 	fragmentAssembler *aeron.ControlledFragmentAssembler
+	// fragmentHandler is fragmentAssembler.OnFragment, bound once in newControl. Passing the method value to
+	// ControlledPoll on every round allocates a closure per round.
+	fragmentHandler term.ControlledFragmentHandler
 
 	errorFragmentHandler term.ControlledFragmentHandler
+}
+
+// newControl returns a Control for archive with its fragment handlers bound.
+func newControl(archive *Archive) *Control {
+	control := new(Control)
+	control.archive = archive
+	control.fragmentAssembler = aeron.NewControlledFragmentAssembler(
+		control.onFragment, aeron.DefaultFragmentAssemblyBufferLength)
+	control.fragmentHandler = control.fragmentAssembler.OnFragment
+	control.errorFragmentHandler = control.errorResponseFragmentHandler
+	return control
 }
 
 // ControlResults for holding state over a Control request/response
@@ -550,7 +564,7 @@ func (control *Control) Poll() (workCount int) {
 		control.Results = ControlResults{}
 	}
 
-	return control.Subscription.ControlledPoll(control.fragmentAssembler.OnFragment, controlFragmentLimit)
+	return control.Subscription.ControlledPoll(control.fragmentHandler, controlFragmentLimit)
 }
 
 func (control *Control) onFragment(
@@ -640,8 +654,9 @@ func (control *Control) PollForResponse(correlationID int64, sessionID int64) (i
 	handler := aeron.NewControlledFragmentAssembler(func(buf *atomic.Buffer, offset int32, length int32, header *logbuffer.Header) term.ControlledPollAction {
 		return controlFragmentHandler(&context, buf, offset, length, header)
 	}, aeron.DefaultFragmentAssemblyBufferLength)
+	fragmentHandler := handler.OnFragment
 	for {
-		ret := control.poll(handler.OnFragment, 10)
+		ret := control.poll(fragmentHandler, 10)
 
 		// Check result
 		if control.Results.IsPollComplete {

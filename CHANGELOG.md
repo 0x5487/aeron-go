@@ -45,3 +45,11 @@ it was made and where it was found (trading-poc experiments under `docs/labs/aer
   `docs/tickets/cloud-perf/issues/10-explicit-idle-strategy.md` (second cloud round): the Go backoff's spin phase never
   told the CPU it was spinning, and the fork had no counterpart of `BusySpinIdleStrategy` to compare against. The old
   name is not aliased (trading-poc is pre-release, AGENTS.md §1.3); the examples use `NoOp`.
+- **poll allocation**: the poll loops no longer allocate on every round. `Poll(x.onFragment, n)` passed a method value
+  that Go boxes into a closure on the heap at each call, and the handler escapes through `aeron.Image`. The handler is
+  now bound once at construction (`boundedLogAdapter`, `serviceAdapter`, `snapshotLoader`, `archive.Control`,
+  `AeronCluster`'s egress), and `Control.PollForResponse` binds its handler before its loop. An idle round allocates
+  nothing (`testing.AllocsPerRun` = 0 in each site's test); `-gcflags=-m` shows the bound escape only at construction.
+  Found in trading-poc `docs/tickets/cloud-perf/issues/13-no-allocation-per-poll.md`: at mixed 20k/s the allocation
+  profile charged 0.41 to 0.61 GB per 10 s to each of the two hottest sites (`docs/plan/stress_result_02.md` §8.4), and
+  that garbage made GC run more often.

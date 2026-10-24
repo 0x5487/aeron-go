@@ -198,20 +198,14 @@ func encode(t *testing.T, data encodable) *atomic.Buffer {
 
 func newTestControl(t *testing.T) (*Control, *aeron.MockImage) {
 	image := aeron.NewMockImage(t)
-	c := &Control{
-		Subscription: newTestSub(image),
-	}
-	c.archive = &Archive{
+	c := newControl(&Archive{
 		Listeners: &ArchiveListeners{},
 		Options:   &Options{
 			Timeout: 100*time.Millisecond,
 			IdleStrategy: idlestrategy.Yielding{},
 		},
-	}
-	c.fragmentAssembler = aeron.NewControlledFragmentAssembler(
-		c.onFragment, aeron.DefaultFragmentAssemblyBufferLength,
-	)
-	c.errorFragmentHandler = c.errorResponseFragmentHandler
+	})
+	c.Subscription = newTestSub(image)
 	return c, image
 }
 

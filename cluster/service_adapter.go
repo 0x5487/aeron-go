@@ -6,6 +6,7 @@ import (
 	"github.com/lirm/aeron-go/aeron"
 	"github.com/lirm/aeron-go/aeron/atomic"
 	"github.com/lirm/aeron-go/aeron/logbuffer"
+	"github.com/lirm/aeron-go/aeron/logbuffer/term"
 	"github.com/lirm/aeron-go/cluster/codecs"
 )
 
@@ -13,13 +14,25 @@ type serviceAdapter struct {
 	marshaller   *codecs.SbeGoMarshaller
 	agent        *ClusteredServiceAgent
 	subscription *aeron.Subscription
+	// fragmentHandler is adapter.onFragment, bound once in newServiceAdapter. Passing the method value to Poll on
+	// every round allocates a closure per round.
+	fragmentHandler term.FragmentHandler
+}
+
+func newServiceAdapter(subscription *aeron.Subscription) *serviceAdapter {
+	adapter := &serviceAdapter{
+		marshaller:   codecs.NewSbeGoMarshaller(),
+		subscription: subscription,
+	}
+	adapter.fragmentHandler = adapter.onFragment
+	return adapter
 }
 
 func (adapter *serviceAdapter) poll() int {
 	if adapter.subscription.IsClosed() {
 		panic("subscription closed")
 	}
-	return adapter.subscription.Poll(adapter.onFragment, 10)
+	return adapter.subscription.Poll(adapter.fragmentHandler, 10)
 }
 
 func (adapter *serviceAdapter) onFragment(

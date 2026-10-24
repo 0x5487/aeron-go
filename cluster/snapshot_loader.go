@@ -19,6 +19,7 @@ import (
 	"github.com/lirm/aeron-go/aeron"
 	"github.com/lirm/aeron-go/aeron/atomic"
 	"github.com/lirm/aeron-go/aeron/logbuffer"
+	"github.com/lirm/aeron-go/aeron/logbuffer/term"
 	"github.com/lirm/aeron-go/cluster/codecs"
 )
 
@@ -31,17 +32,22 @@ type snapshotLoader struct {
 	appVersion int32
 	timeUnit   codecs.ClusterTimeUnitEnum
 	err        error
+	// fragmentHandler is loader.onFragment, bound once in newSnapshotLoader. Passing the method value to Poll on
+	// every round allocates a closure per round.
+	fragmentHandler term.FragmentHandler
 }
 
 func newSnapshotLoader(agent *ClusteredServiceAgent, img aeron.Image) *snapshotLoader {
-	return &snapshotLoader{agent: agent, img: img, marshaller: codecs.NewSbeGoMarshaller()}
+	loader := &snapshotLoader{agent: agent, img: img, marshaller: codecs.NewSbeGoMarshaller()}
+	loader.fragmentHandler = loader.onFragment
+	return loader
 }
 
 func (loader *snapshotLoader) poll() int {
 	if loader.isDone {
 		return 0
 	}
-	return loader.img.Poll(loader.onFragment, 1)
+	return loader.img.Poll(loader.fragmentHandler, 1)
 }
 
 func (loader *snapshotLoader) onFragment(

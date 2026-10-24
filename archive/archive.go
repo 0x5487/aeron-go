@@ -221,11 +221,7 @@ func NewArchive(options *Options, context *aeron.Context) (*Archive, error) {
 	logging.SetLevel(archive.Options.AeronLoglevel, "rb")
 
 	// Setup the Control (subscriber/response)
-	archive.Control = new(Control)
-	archive.Control.archive = archive
-	archive.Control.fragmentAssembler = aeron.NewControlledFragmentAssembler(
-		archive.Control.onFragment, aeron.DefaultFragmentAssemblyBufferLength)
-	archive.Control.errorFragmentHandler = archive.Control.errorResponseFragmentHandler
+	archive.Control = newControl(archive)
 
 	// Setup the Proxy (publisher/request)
 	archive.Proxy = new(Proxy)
