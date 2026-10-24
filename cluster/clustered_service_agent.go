@@ -48,6 +48,7 @@ type ClusteredServiceAgent struct {
 	opts                     *Options
 	proxy                    *consensusModuleProxy
 	counters                 *counters.Reader
+	electionCounter          electionStateCounter
 	serviceAdapter           *serviceAdapter
 	logAdapter               *boundedLogAdapter
 	markFile                 *ClusterMarkFile

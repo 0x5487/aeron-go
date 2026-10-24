@@ -17,20 +17,54 @@ const ElectionStateClosed ElectionState = 17
 // consensus module of a cluster publishes its election state in (AeronCounters.CLUSTER_ELECTION_STATE_TYPE_ID).
 const electionStateCounterTypeId = 207
 
+// electionStateCounter is the election state counter ElectionState found last: its id and its registration id.
+type electionStateCounter struct {
+	known          bool
+	id             int32
+	registrationId int64
+}
+
 // ElectionState returns the election state of this cluster's consensus module. It reads the counter of type
 // ELECTION_STATE_TYPE_ID whose key begins with this member's cluster id (ClusterCounters.allocate writes the cluster id
-// first in the key, so a counter of another cluster on the same media driver is not taken). The counter is looked up and
-// read on every call: no value and no counter id is kept, so a counter the consensus module re-creates (a restart) is
-// read rather than a stale one.
+// first in the key, so a counter of another cluster on the same media driver is not taken).
+//
+// The id and the registration id of the counter found are kept, so a call does not walk the media driver's counters
+// (their number grows with every connection, publication and image). Before each read the kept id is checked, in constant
+// time and without allocating: the record is allocated, its type is ELECTION_STATE_TYPE_ID, the cluster id in its key is
+// this member's and its registration id is the one kept. The registration id is what tells a counter from a later one
+// that the driver allocated at the same id after freeing it. A kept id that fails the check is dropped and the counter is
+// looked up again (and the one found is kept), so a counter the consensus module re-creates (a restart) is read and a
+// stale or foreign one never is. The one remaining window is the driver freeing and reusing the record between the check
+// and the read of the value; Aeron's own readers have it too, and the next call sees the change.
 //
 // ok is false when there is no such counter (yet): the state is unknown. Unknown is not ElectionStateClosed, so a caller
 // that answers only in CLOSED must not answer on it.
+//
+// The kept counter is not synchronised: ElectionState must be called from one goroutine at a time. The trading-poc query
+// gate calls it only from the service goroutine; a caller on several goroutines must serialise the calls.
 func (agent *ClusteredServiceAgent) ElectionState() (ElectionState, bool) {
-	id := agent.counters.FindCounter(electionStateCounterTypeId, func(keyBuffer *atomic.Buffer) bool {
-		return keyBuffer.GetInt32(0) == agent.opts.ClusterId
-	})
-	if id == counters.NullCounterId {
-		return 0, false
+	kept := &agent.electionCounter
+	if !kept.known || !agent.keptElectionCounterIsValid() {
+		id := agent.counters.FindCounter(electionStateCounterTypeId, func(keyBuffer *atomic.Buffer) bool {
+			return keyBuffer.GetInt32(0) == agent.opts.ClusterId
+		})
+		if id == counters.NullCounterId {
+			kept.known = false
+			return 0, false
+		}
+		*kept = electionStateCounter{known: true, id: id, registrationId: agent.counters.GetCounterRegistrationId(id)}
 	}
-	return ElectionState(agent.counters.GetCounterValue(id)), true
+	return ElectionState(agent.counters.GetCounterValue(kept.id)), true
+}
+
+// keptElectionCounterIsValid reports whether the kept id still names this member's election state counter.
+func (agent *ClusteredServiceAgent) keptElectionCounterIsValid() bool {
+	kept := &agent.electionCounter
+	if !agent.counters.IsCounterAllocated(kept.id) ||
+		agent.counters.GetCounterTypeId(kept.id) != electionStateCounterTypeId ||
+		agent.counters.GetCounterRegistrationId(kept.id) != kept.registrationId {
+		return false
+	}
+	clusterId, err := agent.counters.GetKeyPartInt32(kept.id, 0)
+	return err == nil && clusterId == agent.opts.ClusterId
 }

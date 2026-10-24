@@ -114,9 +114,9 @@ func TestElectionStateTakesTheCounterOfItsOwnCluster(t *testing.T) {
 	assert.Equal(t, ElectionState(0), got, "cluster 9's counter, not cluster 7's")
 }
 
-// The lookup runs on every call, not only the first: a consensus module that restarts allocates its counters again, and the
-// counter of this cluster can sit at another record index. A member that kept the id of its first lookup would read the
-// record that now holds another counter.
+// The kept counter id is checked before each read: when the counters buffer no longer holds this cluster's election state
+// counter at that id (a restart allocated the counters again and this cluster's counter sits at another record), the
+// counter is looked up again rather than the record that now holds another counter being read.
 func TestElectionStateFindsTheCounterAgainAfterItMovesRecords(t *testing.T) {
 	t.Parallel()
 	const clusterID = int32(7)
@@ -138,4 +138,155 @@ func TestElectionStateFindsTheCounterAgainAfterItMovesRecords(t *testing.T) {
 	got, ok = agent.ElectionState()
 	require.True(t, ok)
 	assert.Equal(t, ElectionState(10), got, "the value of the counter at its new record")
+}
+
+// electionRecords is a counters buffer pair a test edits record by record, the way a media driver frees and re-allocates
+// counters: set writes a whole record (allocated, type, key cluster id, registration id, value), free reclaims it.
+type electionRecords struct {
+	meta, vals *atomic.Buffer
+	reader     *counters.Reader
+}
+
+func newElectionRecords(t testing.TB, records int) *electionRecords {
+	t.Helper()
+	// One record more than used, so Reader.FindCounter (which stops before the last record) sees all of them.
+	meta := atomic.MakeBuffer(make([]byte, (records+1)*int(counters.MetadataLength)))
+	vals := atomic.MakeBuffer(make([]byte, (records+1)*int(counters.CounterLength)))
+	return &electionRecords{meta: meta, vals: vals, reader: counters.NewReader(vals, meta)}
+}
+
+func (r *electionRecords) set(id int32, typeID, clusterID int32, registrationID, value int64) {
+	off := id * counters.MetadataLength
+	r.meta.PutInt32(off, counters.RecordAllocated)
+	r.meta.PutInt32(off+counters.TypeIdOffset, typeID)
+	r.meta.PutInt32(off+counters.KeyOffset, clusterID)
+	r.vals.PutInt64(id*counters.CounterLength+counters.RegistrationIdOffset, registrationID)
+	r.vals.PutInt64(id*counters.CounterLength, value)
+}
+
+func (r *electionRecords) free(id int32) {
+	r.meta.PutInt32(id*counters.MetadataLength, counters.RecordReclaimed)
+}
+
+// Once the counter is found its id is kept: the next call validates that id and reads it, it does not scan. Record 0 is
+// made a matching counter after the first call; a scan from record 0 would take it, the kept id (record 1) is still the
+// counter that was found and is still valid.
+func TestElectionStateReadsTheKeptCounterWithoutScanning(t *testing.T) {
+	t.Parallel()
+	const clusterID = int32(7)
+	rec := newElectionRecords(t, 2)
+	rec.set(0, commitPosCounterTypeId, clusterID, 1, 100)
+	rec.set(1, electionStateCounterTypeId, clusterID, 2, int64(ElectionStateClosed))
+	agent := electionAgent(t, clusterID, rec.reader)
+
+	got, ok := agent.ElectionState()
+	require.True(t, ok)
+	require.Equal(t, ElectionStateClosed, got)
+
+	rec.set(0, electionStateCounterTypeId, clusterID, 3, 5)
+	rec.vals.PutInt64(1*counters.CounterLength, 10)
+
+	got, ok = agent.ElectionState()
+	require.True(t, ok)
+	assert.Equal(t, ElectionState(10), got, "the kept counter at record 1, not what a scan from record 0 finds")
+}
+
+// A kept id that no longer names this member's election state counter is not read: the counter is looked up again, and
+// the state is unknown when there is none.
+func TestElectionStateDoesNotReadAKeptIdThatIsNoLongerItsCounter(t *testing.T) {
+	t.Parallel()
+	const clusterID = int32(7)
+	tests := []struct {
+		name   string
+		mutate func(rec *electionRecords)
+	}{
+		{"freed", func(rec *electionRecords) { rec.free(1) }},
+		{"re-allocated to another cluster's election state counter", func(rec *electionRecords) {
+			rec.set(1, electionStateCounterTypeId, 9, 2, 3)
+		}},
+		{"re-allocated to a counter of another type", func(rec *electionRecords) {
+			rec.set(1, commitPosCounterTypeId, clusterID, 2, 3)
+		}},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			rec := newElectionRecords(t, 2)
+			rec.set(0, commitPosCounterTypeId, clusterID, 1, 100)
+			rec.set(1, electionStateCounterTypeId, clusterID, 2, int64(ElectionStateClosed))
+			agent := electionAgent(t, clusterID, rec.reader)
+			_, ok := agent.ElectionState()
+			require.True(t, ok)
+
+			tt.mutate(rec)
+
+			_, ok = agent.ElectionState()
+			assert.False(t, ok, "the unknown state, not the value of a counter that is not ours")
+		})
+	}
+}
+
+// A freed counter is replaced by the consensus module's new one at another record: the next call finds and reads it, and
+// keeps that id from then on.
+func TestElectionStateFindsTheNewCounterAfterTheKeptOneIsFreed(t *testing.T) {
+	t.Parallel()
+	const clusterID = int32(7)
+	rec := newElectionRecords(t, 3)
+	rec.set(0, commitPosCounterTypeId, clusterID, 1, 100)
+	rec.set(1, electionStateCounterTypeId, clusterID, 2, int64(ElectionStateClosed))
+	agent := electionAgent(t, clusterID, rec.reader)
+	_, ok := agent.ElectionState()
+	require.True(t, ok)
+
+	rec.free(1)
+	rec.set(2, electionStateCounterTypeId, clusterID, 4, 10)
+
+	got, ok := agent.ElectionState()
+	require.True(t, ok)
+	assert.Equal(t, ElectionState(10), got, "the new counter")
+
+	rec.vals.PutInt64(2*counters.CounterLength, 11)
+	got, ok = agent.ElectionState()
+	require.True(t, ok)
+	assert.Equal(t, ElectionState(11), got, "the new counter, kept")
+}
+
+// The same id re-allocated to a counter of the same type and cluster but another registration id is a different counter:
+// the lookup is made again. Record 0 holds another matching counter, which only a new lookup reaches.
+func TestElectionStateLooksUpAgainWhenTheRegistrationIdChanges(t *testing.T) {
+	t.Parallel()
+	const clusterID = int32(7)
+	rec := newElectionRecords(t, 2)
+	rec.set(0, commitPosCounterTypeId, clusterID, 1, 100)
+	rec.set(1, electionStateCounterTypeId, clusterID, 2, int64(ElectionStateClosed))
+	agent := electionAgent(t, clusterID, rec.reader)
+	_, ok := agent.ElectionState()
+	require.True(t, ok)
+
+	rec.set(0, electionStateCounterTypeId, clusterID, 5, 5)
+	rec.set(1, electionStateCounterTypeId, clusterID, 6, 9)
+
+	got, ok := agent.ElectionState()
+	require.True(t, ok)
+	assert.Equal(t, ElectionState(5), got, "looked up again: the first matching counter")
+}
+
+// A kept id whose counter is freed with no other counter in the buffer, and one that never existed, are unknown; once the
+// counter is allocated it is found.
+func TestElectionStateIsUnknownUntilTheCounterIsAllocated(t *testing.T) {
+	t.Parallel()
+	const clusterID = int32(7)
+	rec := newElectionRecords(t, 1)
+	agent := electionAgent(t, clusterID, rec.reader)
+
+	_, ok := agent.ElectionState()
+	require.False(t, ok)
+	_, ok = agent.ElectionState()
+	require.False(t, ok)
+
+	rec.set(0, electionStateCounterTypeId, clusterID, 1, int64(ElectionStateClosed))
+	got, ok := agent.ElectionState()
+	require.True(t, ok)
+	assert.Equal(t, ElectionStateClosed, got)
 }

@@ -33,11 +33,18 @@ it was made and where it was found (trading-poc experiments under `docs/labs/aer
 - **cluster**: `ClusteredServiceAgent.ElectionState` reads the consensus module's election state counter
   (`ELECTION_STATE_TYPE_ID`, keyed by cluster id) and reports "unknown" when there is no such counter. The trading-poc
   query gate (cloud-prep 67) answers only while the election is `CLOSED`, so it asks on every request instead of keeping
-  a copy; a restarted consensus module may re-create the counter, so no counter id is kept either. Found in trading-poc
-  lab `docs/labs/aeron/11-election-state-query-gate.md` (V4).
+  a copy of the state. Found in trading-poc lab `docs/labs/aeron/11-election-state-query-gate.md` (V4).
 
 ### Changed
 
+- **cluster**: `ClusteredServiceAgent.ElectionState` keeps the id and registration id of the counter it found and checks
+  them before each read instead of walking the media driver's counters on every call. The check is O(1) and allocates
+  nothing: the record is allocated, its type is `ELECTION_STATE_TYPE_ID`, the cluster id in its key is this member's, and
+  its registration id is the kept one (a counter freed and re-allocated at the same id has another registration id). A
+  kept id that fails is dropped and the counter is looked up again, so a re-created counter is never read stale and no
+  counter still reads as unknown. The old call walked every counter: 8.4 us with 1,000 counters and one allocation,
+  35 ns and none now, independent of the count. The kept counter is not synchronised; call it from one goroutine (the
+  trading-poc query gate calls it from the service goroutine). Found in trading-poc cloud-perf 19.
 - **idlestrategy**: `Busy` is renamed to `NoOp`, the Java `NoOpIdleStrategy` it always was, and `BusySpin` is added as
   the Java `BusySpinIdleStrategy`: an idle round executes one CPU spin-wait hint (`PAUSE` on amd64, `YIELD` on arm64,
   an empty function on every other architecture) and returns. `BackoffIdleStrategy`'s spinning state calls the same
