@@ -36,6 +36,10 @@ it was made and where it was found (trading-poc experiments under `docs/labs/aer
   polls the egress, and is `Connected` again when the publication connects (`OnConnect` is not called: the session is
   the same). It waits 5 s at most (Java: `AWAIT_NEW_LEADER_CONNECTION`, `messageTimeoutNs`), then the client closes and
   `OnError` says so. Before, `Poll` called `OnDisconnect` and opened a new session at once.
+- **cluster client**: both waits of the connect treat their deadline the same way (cloud-perf 40 review). The client
+  waited for the connect reply while `now < deadline` and so gave up exactly at the deadline, while the wait for the
+  publication gives up only after it (`now > deadline`): two waits of one client read the same instant differently. It
+  now reads the egress once more at the deadline and gives up one millisecond later.
 
 ### Added
 
@@ -57,7 +61,8 @@ it was made and where it was found (trading-poc experiments under `docs/labs/aer
   `Close` and builds a new client, as with the `CLOSED` event. Java closes the client on these timeouts. The state
   `Disconnected` and `nextRetryConnectTime` are gone. The two reconnect policies of trading-poc (a writer or bridge
   rebuilds after N seconds, and aeron-go waits 30 s) are one owner now. `ingressPublication` and `egressSubscription`
-  are the interfaces the client uses of the driver objects; the tests replace them.
+  are the interfaces the client uses of the driver objects; the tests replace them. The correlation id of a connect
+  request comes from the driver through `nextCorrelationId`, another seam the tests replace.
 - **cluster**: `ClusteredServiceAgent.ElectionState` keeps the id and registration id of the counter it found and checks
   them before each read instead of walking the media driver's counters on every call. The check is O(1) and allocates
   nothing: the record is allocated, its type is `ELECTION_STATE_TYPE_ID`, the cluster id in its key is this member's, and

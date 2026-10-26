@@ -2,6 +2,7 @@ package client
 
 import (
 	"bytes"
+	"fmt"
 	"testing"
 	"time"
 
@@ -20,6 +21,9 @@ type fakePublication struct {
 	channel   string
 	connected bool
 	closed    bool
+	// sessionHeaders are the session headers of the messages offered, in order: Offer2 is offered the session header
+	// and the payload.
+	sessionHeaders [][]byte
 }
 
 func (p *fakePublication) IsConnected() bool { return p.connected && !p.closed }
@@ -52,18 +56,26 @@ func (p *fakePublication) Offer(*atomic.Buffer, int32, int32, term.ReservedValue
 }
 
 func (p *fakePublication) Offer2(
-	*atomic.Buffer, int32, int32, *atomic.Buffer, int32, int32, term.ReservedValueSupplier,
+	hdr *atomic.Buffer, offset, length int32,
+	_ *atomic.Buffer, _, _ int32,
+	_ term.ReservedValueSupplier,
 ) int64 {
+	p.sessionHeaders = append(p.sessionHeaders, hdr.GetBytesArray(offset, length))
 	return p.result()
 }
 
 // fakeDriver records every publication the client adds, in order.
 type fakeDriver struct {
 	added []*fakePublication
+	// failOn makes add fail for a publication on this endpoint, as a driver that cannot make it does.
+	failOn string
 }
 
 func (d *fakeDriver) add(channel string) (ingressPublication, error) {
 	p := &fakePublication{channel: channel}
+	if d.failOn != "" && p.endpoint() == d.failOn {
+		return nil, fmt.Errorf("no publication on %s", d.failOn)
+	}
 	d.added = append(d.added, p)
 	return p, nil
 }
@@ -92,10 +104,37 @@ func (d *fakeDriver) openOn(t *testing.T, endpoint string) *fakePublication {
 	return found[0]
 }
 
-// fakeEgress is an egress subscription with nothing to read, whose channel is bound.
-type fakeEgress struct{ closed bool }
+// fakeEgress is an egress subscription whose channel is bound. The frames a test queues are handed to the client's handler
+// by Poll, fragmentLimit at a time, as the media driver hands over the fragments of the egress stream.
+type fakeEgress struct {
+	closed bool
+	// frames are the payloads waiting to be read, in order: the next Poll reads them.
+	frames []*atomic.Buffer
+	// header is the frame header of every frame handed on: unfragmented, which the fragment assembler delegates whole.
+	header *logbuffer.Header
+}
 
-func (*fakeEgress) Poll(term.FragmentHandler, int) int { return 0 }
+func (e *fakeEgress) Poll(handler term.FragmentHandler, fragmentLimit int) int {
+	n := 0
+	for n < fragmentLimit && n < len(e.frames) {
+		msg := e.frames[n]
+		handler(msg, 0, msg.Capacity(), e.frameHeader())
+		n++
+	}
+	e.frames = e.frames[n:]
+	return n
+}
+
+// frameHeader is the header of frame, made the first time it is needed: one unfragmented frame (BEGIN and END).
+func (e *fakeEgress) frameHeader() *logbuffer.Header {
+	if e.header == nil {
+		frame := atomic.MakeBuffer(make([]byte, logbuffer.DataFrameHeader.Length))
+		logbuffer.FrameFlags(frame, 0, 0xC0)
+		e.header = new(logbuffer.Header).Wrap(frame.Ptr(), frame.Capacity())
+	}
+	return e.header
+}
+
 func (*fakeEgress) TryResolveChannelEndpointPort() string {
 	return "aeron:udp?endpoint=localhost:40456"
 }
@@ -136,6 +175,8 @@ type clientRig struct {
 	driver *fakeDriver
 	clock  *fakeClock
 	rec    *listenerRecorder
+	// correlations counts the correlation ids the driver has given the client.
+	correlations int64
 }
 
 // newConnectedRig builds a client that has a session with the cluster and whose leader is member leader, as it is
@@ -160,9 +201,16 @@ func newConnectedRig(t *testing.T, leader int32) *clientRig {
 		addPublication:      rig.driver.add,
 		clock:               rig.clock.Now,
 	}
+	rig.ac.nextCorrelationId = func() int64 {
+		rig.correlations++
+		return rig.correlations
+	}
 	rig.ac.bindEgressHandler()
 	rig.ac.updateMemberEndpoints(endpoints)
 	rig.driver.openOn(t, endpointOf(leader)).connected = true
+	// the header of the session's messages, as the connect reply leaves it
+	rig.ac.sessionMsgHdrBuffer.PutInt64(cluster.SBEHeaderLength, 1)
+	rig.ac.sessionMsgHdrBuffer.PutInt64(cluster.SBEHeaderLength+8, testSessionID)
 	rig.ac.state = clientConnected
 	return rig
 }
@@ -208,6 +256,12 @@ func sessionEventFrame(t *testing.T, e codecs.SessionEvent) *atomic.Buffer {
 // deliver hands an egress message to the client as the fragment assembler would.
 func (r *clientRig) deliver(buf *atomic.Buffer) {
 	r.ac.onFragment(buf, 0, buf.Capacity(), nil)
+}
+
+// queue leaves frames on the egress for the next Poll to read, as the media driver would have them waiting.
+func (r *clientRig) queue(frames ...*atomic.Buffer) {
+	e := r.ac.egressSub.(*fakeEgress)
+	e.frames = append(e.frames, frames...)
 }
 
 // offer offers one message the way the application does.

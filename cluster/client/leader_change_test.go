@@ -1,12 +1,14 @@
 package client
 
 import (
+	"encoding/binary"
 	"testing"
 	"time"
 
 	"github.com/lirm/aeron-go/aeron"
 	"github.com/lirm/aeron-go/aeron/atomic"
 	"github.com/lirm/aeron-go/aeron/logbuffer"
+	"github.com/lirm/aeron-go/cluster"
 	"github.com/lirm/aeron-go/cluster/codecs"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -152,6 +154,116 @@ func TestNewLeaderWhileAwaitingTheLastOne(t *testing.T) {
 	assert.Positive(t, rig.offer())
 	assert.Equal(t, []int32{1, 2}, rig.rec.newLeaders)
 	assert.Len(t, rig.driver.open(), 1)
+}
+
+// The driver cannot make the publication of the new leader: the client waits for it as for one that is slow, and gives up
+// when the wait ends, telling the listener once. The publication that is not there is never dereferenced (cloud-perf 40,
+// review G1).
+func TestANewLeaderWhosePublicationTheDriverCannotMake(t *testing.T) {
+	rig := newConnectedRig(t, 0)
+	rig.driver.failOn = endpointOf(1)
+
+	rig.deliver(newLeaderFrame(t, testSessionID, 2, 1, rig.ac.opts.IngressEndpoints))
+	require.False(t, rig.ac.IsClosed())
+
+	require.NotPanics(t, func() { rig.ac.Poll() }, "the publication that could not be made is not dereferenced")
+	assert.False(t, rig.ac.IsClosed(), "still inside the wait")
+	assert.Empty(t, rig.rec.errors)
+
+	rig.clock.advance(newLeaderConnectTimeout)
+	require.NotPanics(t, func() { rig.ac.Poll() })
+	assert.True(t, rig.ac.IsClosed())
+	require.Len(t, rig.rec.errors, 1, "the listener is told once")
+	assert.Contains(t, rig.rec.errors[0], "new leader")
+}
+
+// The cluster closes the session in the egress of the poll that also finds the new leader's publication connected: the
+// client stays closed, it does not connect through the publication it was about to use (cloud-perf 40, review G2a).
+func TestASessionClosedWhileAwaitingTheNewLeaderIsNotRevived(t *testing.T) {
+	rig := newConnectedRig(t, 0)
+	rig.deliver(newLeaderFrame(t, testSessionID, 2, 1, rig.ac.opts.IngressEndpoints))
+	rig.driver.openOn(t, endpointOf(1)).connected = true
+	rig.queue(sessionEventFrame(t, codecs.SessionEvent{
+		ClusterSessionId: testSessionID, Code: codecs.EventCode.CLOSED, Detail: []byte("terminated"),
+	}))
+
+	rig.ac.Poll()
+
+	assert.True(t, rig.ac.IsClosed(), "the session the cluster closed does not come back")
+	assert.False(t, rig.ac.IsConnected())
+	assert.Equal(t, []string{"terminated"}, rig.rec.disconnects)
+	assert.Equal(t, aeron.NotConnected, rig.offer())
+}
+
+// A reply of the cluster is read by Poll while the client waits for the new leader's publication (cloud-perf 40, review
+// G2b).
+func TestAReplyIsReadWhileAwaitingTheNewLeader(t *testing.T) {
+	rig := newConnectedRig(t, 0)
+	rig.deliver(newLeaderFrame(t, testSessionID, 2, 1, rig.ac.opts.IngressEndpoints))
+	rec := &messageRecorder{}
+	rig.ac.egressListener = &delegatingListener{listenerRecorder: rig.rec, messages: rec}
+	rig.queue(sessionMessage(testSessionID, "reply"))
+
+	rig.ac.Poll()
+
+	assert.Equal(t, []string{"reply"}, rec.payloads)
+}
+
+// The message offered after NEW_LEADER carries the new leadership term in its session header, at the offset the cluster
+// reads (cloud-perf 40, review G4).
+func TestTheSessionHeaderCarriesTheNewTerm(t *testing.T) {
+	rig := newConnectedRig(t, 0)
+	before := rig.driver.openOn(t, endpointOf(0))
+	require.Positive(t, rig.offer())
+	assert.EqualValues(t, 1, headerInt64(t, before, 0), "the term of the session before the change")
+
+	rig.moveLeader(t, 2, 1)
+	after := rig.driver.openOn(t, endpointOf(1))
+	require.Positive(t, rig.offer())
+
+	assert.EqualValues(t, 2, headerInt64(t, after, 0), "the term the new leader announced")
+	assert.EqualValues(t, testSessionID, headerInt64(t, after, 8), "the session is the same")
+}
+
+// headerInt64 is the Int64 at offset of the session header of the last message offered on pub: the header the cluster
+// reads, not the payload.
+func headerInt64(t *testing.T, pub *fakePublication, offset int) int64 {
+	t.Helper()
+	require.NotEmpty(t, pub.sessionHeaders, "no message was offered on %s", pub.endpoint())
+	hdr := pub.sessionHeaders[len(pub.sessionHeaders)-1]
+	return int64(binary.LittleEndian.Uint64(hdr[int(cluster.SBEHeaderLength)+offset:]))
+}
+
+// A NEW_LEADER for another session is ignored: the leader, the endpoints and the state stay, and the listener is not told
+// (cloud-perf 40, review G5).
+func TestANewLeaderForAnotherSessionIsIgnored(t *testing.T) {
+	rig := newConnectedRig(t, 0)
+	moved := endpointsOf("m0:20110", "m1-new:30000", "m2:20110")
+
+	rig.deliver(newLeaderFrame(t, testSessionID+1, 2, 1, moved))
+
+	assert.Equal(t, int32(0), rig.ac.LeaderMemberId())
+	assert.EqualValues(t, 1, rig.ac.LeadershipTermId())
+	assert.Equal(t, clientConnected, rig.ac.state)
+	assert.Empty(t, rig.rec.newLeaders)
+	require.Len(t, rig.driver.open(), 1)
+	assert.Equal(t, endpointOf(0), rig.driver.open()[0].endpoint())
+	assert.Positive(t, rig.offer(), "still offered to the same leader")
+}
+
+// The client's own publication (its IngressEndpoints named no member) is closed when a new leader is announced: it does
+// not belong to the member table, and a closed publication never connects (cloud-perf 40, review G9).
+func TestANewLeaderClosesTheIngressPublicationOfAClientWithoutMembers(t *testing.T) {
+	rig := newConnectedRig(t, 0)
+	own, ok := rig.ac.ingressPub.(*fakePublication)
+	require.True(t, ok)
+	rig.ac.memberByIdMap = make(map[int32]*memberIngress) // the endpoints name no member
+	rig.ac.opts.IngressEndpoints = "not-a-member"         // but they are not empty: the client reads them again
+
+	rig.deliver(newLeaderFrame(t, testSessionID, 2, 1, rig.ac.opts.IngressEndpoints))
+
+	assert.True(t, own.closed, "the publication of the client is closed, no member owns it")
+	assert.Nil(t, rig.ac.ingressPub)
 }
 
 // While the client waits for the new leader's publication, a reply of the cluster still reaches the application, and the

@@ -79,6 +79,9 @@ type AeronCluster struct {
 	awaitTimeoutTime    int64
 	// addPublication creates an ingress publication on channel; the tests replace it.
 	addPublication func(channel string) (ingressPublication, error)
+	// nextCorrelationId is the id of the next request to the cluster; it comes from the media driver, and the tests
+	// replace it.
+	nextCorrelationId func() int64
 	// clock is the time source of the timeouts; the tests replace it.
 	clock func() time.Time
 }
@@ -162,6 +165,7 @@ func NewAeronCluster(
 		clock:               time.Now,
 	}
 	client.addPublication = client.addDriverPublication
+	client.nextCorrelationId = client.aeronClient.NextCorrelationID
 	client.bindEgressHandler()
 	client.updateMemberEndpoints(options.IngressEndpoints)
 
@@ -203,7 +207,9 @@ func (ac *AeronCluster) Poll() int {
 		}
 		return ret
 	case clientAwaitConnectReply:
-		if ac.ingressPub.IsConnected() && ac.nowMillis() < ac.awaitTimeoutTime {
+		// The deadline is the last instant the client still reads the egress; it gives up after it, as the wait for the
+		// publication does.
+		if ac.ingressPub.IsConnected() && ac.nowMillis() <= ac.awaitTimeoutTime {
 			return ac.pollEgress(1)
 		}
 		ac.giveUp("timed out waiting for session connect reply")
@@ -421,7 +427,7 @@ func (ac *AeronCluster) awaitPublicationConnected() (int, error) {
 
 // Returns nil on success, TemporaryError, or any other error is a permanent error.
 func (ac *AeronCluster) sendConnectRequest(responseChannel string) error {
-	ac.correlationId = ac.aeronClient.NextCorrelationID()
+	ac.correlationId = ac.nextCorrelationId()
 	req := codecs.SessionConnectRequest{
 		CorrelationId:    ac.correlationId,
 		ResponseStreamId: ac.opts.EgressStreamId,

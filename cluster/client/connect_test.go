@@ -128,3 +128,118 @@ func TestRedirectToAMemberWithAClosedPublication(t *testing.T) {
 	assert.False(t, rig.ac.ingressPub.IsClosed())
 	assert.Equal(t, endpointOf(2), rig.ac.ingressPub.(*fakePublication).endpoint())
 }
+
+// A redirect to a member whose endpoint changed while its publication from the connect phase is still open: the
+// publication of the address the member left is closed and one is made on the new address (cloud-perf 40, review G3).
+func TestRedirectToAMemberWhoseEndpointChanged(t *testing.T) {
+	rig := newConnectingRig(t)
+	rig.ac.Poll() // the publications of the three members
+	oldOnTwo := rig.driver.openOn(t, endpointOf(2))
+	rig.driver.openOn(t, endpointOf(0)).connected = true
+	rig.ac.ingressPub = rig.driver.openOn(t, endpointOf(0))
+	rig.ac.state = clientAwaitConnectReply
+	rig.ac.correlationId = 5
+	rig.ac.awaitTimeoutTime = rig.clock.Now().UnixMilli() + 3_000
+	moved := endpointsOf("m0:20110", "m1:20110", "m2-new:30000")
+
+	rig.deliver(sessionEventFrame(t, codecs.SessionEvent{
+		CorrelationId: 5, LeaderMemberId: 2, Code: codecs.EventCode.REDIRECT, Detail: []byte(moved),
+	}))
+
+	assert.True(t, oldOnTwo.closed, "the publication of the address the member left is closed")
+	assert.Equal(t, "m2-new:30000", rig.driver.openOn(t, "m2-new:30000").endpoint())
+	require.Len(t, rig.driver.open(), 1, "only the new leader's publication is open")
+	assert.NotSame(t, oldOnTwo, rig.ac.ingressPub)
+	require.NotNil(t, rig.ac.ingressPub)
+	assert.False(t, rig.ac.ingressPub.IsClosed())
+}
+
+// A client whose IngressEndpoints are empty makes its one publication on the ingress channel and connects (cloud-perf 40,
+// review G6).
+func TestAClientWithoutIngressEndpointsConnects(t *testing.T) {
+	rig := newConnectingRig(t)
+	rig.ac.opts.IngressEndpoints = ""
+	rig.ac.memberByIdMap = make(map[int32]*memberIngress) // no endpoints, no members to know
+	rig.ac.ingressPub = nil
+	rig.driver.added = nil
+
+	rig.ac.Poll() // the publication on the ingress channel
+	require.Equal(t, clientAwaitPublicationConnected, rig.ac.state)
+	require.Len(t, rig.driver.added, 1)
+	rig.driver.added[0].connected = true
+
+	rig.ac.Poll() // the connect request goes out
+	require.Equal(t, clientAwaitConnectReply, rig.ac.state)
+	rig.deliver(sessionEventFrame(t, codecs.SessionEvent{
+		CorrelationId: rig.ac.correlationId, ClusterSessionId: 11, LeadershipTermId: 3, LeaderMemberId: 0,
+		Code: codecs.EventCode.OK,
+	}))
+
+	assert.True(t, rig.ac.IsConnected(), "the client is connected")
+	assert.EqualValues(t, 11, rig.ac.ClusterSessionId())
+	assert.Equal(t, 1, rig.rec.connects)
+}
+
+// Both deadlines of the connect are the last instant the client still waits: exactly at them it has not given up, one
+// millisecond later it has (cloud-perf 40, review G7).
+func TestTheConnectDeadlinesAreInclusive(t *testing.T) {
+	t.Run("waiting for the ingress publication", func(t *testing.T) {
+		rig := newConnectingRig(t)
+		rig.ac.Poll() // the publications; the client waits five seconds for one of them
+
+		rig.clock.advance(5 * time.Second) // exactly the deadline
+		rig.ac.Poll()
+		require.False(t, rig.ac.IsClosed(), "exactly at the deadline the client still waits")
+		assert.Empty(t, rig.rec.errors)
+
+		rig.clock.advance(time.Millisecond)
+		rig.ac.Poll()
+		assert.True(t, rig.ac.IsClosed(), "one tick after the deadline it has given up")
+	})
+
+	t.Run("waiting for the connect reply", func(t *testing.T) {
+		rig := newConnectingRig(t)
+		rig.ac.Poll()
+		rig.driver.openOn(t, endpointOf(0)).connected = true
+		rig.ac.ingressPub = rig.driver.openOn(t, endpointOf(0))
+		rig.ac.state = clientAwaitConnectReply
+		rig.ac.correlationId = 5
+		rig.ac.awaitTimeoutTime = rig.clock.Now().UnixMilli() + 3_000 // the three seconds the reply is waited
+
+		rig.clock.advance(3 * time.Second) // exactly the deadline
+		rig.ac.Poll()
+		require.False(t, rig.ac.IsClosed(), "exactly at the deadline the client still waits")
+		assert.Empty(t, rig.rec.errors)
+
+		rig.clock.advance(time.Millisecond)
+		rig.ac.Poll()
+		assert.True(t, rig.ac.IsClosed(), "one tick after the deadline it has given up")
+	})
+}
+
+// An ERROR for another connect is not this connect's: the client keeps waiting and connects on its own reply
+// (cloud-perf 40, review G8).
+func TestAnErrorForAnotherConnectIsIgnored(t *testing.T) {
+	rig := newConnectingRig(t)
+	rig.ac.Poll()
+	rig.driver.openOn(t, endpointOf(0)).connected = true
+	rig.ac.ingressPub = rig.driver.openOn(t, endpointOf(0))
+	rig.ac.state = clientAwaitConnectReply
+	rig.ac.correlationId = 5
+	rig.ac.awaitTimeoutTime = rig.clock.Now().UnixMilli() + 3_000
+
+	rig.deliver(sessionEventFrame(t, codecs.SessionEvent{
+		CorrelationId: 6, Code: codecs.EventCode.ERROR, Detail: []byte("another connect"),
+	}))
+
+	assert.False(t, rig.ac.IsClosed(), "another connect's error is not this one's")
+	assert.Equal(t, clientAwaitConnectReply, rig.ac.state)
+	assert.Empty(t, rig.rec.errors)
+
+	rig.deliver(sessionEventFrame(t, codecs.SessionEvent{
+		CorrelationId: 5, ClusterSessionId: 11, LeadershipTermId: 3, LeaderMemberId: 0, Code: codecs.EventCode.OK,
+	}))
+
+	assert.True(t, rig.ac.IsConnected(), "the client connects on its own reply")
+	assert.Equal(t, 1, rig.rec.connects)
+}
