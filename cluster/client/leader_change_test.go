@@ -294,3 +294,52 @@ func (d *delegatingListener) OnMessage(
 ) {
 	d.messages.OnMessage(ac, ts, buf, off, length, h)
 }
+
+// The first fragment of a message from the old leader is not joined with the last fragment that comes after NEW_LEADER:
+// the client drops the fragments it kept when the leader changed, so the half message is never delivered, and the next whole
+// message of the new leader is (cloud-perf 40, review N5). Two arrangements reach the drop: the endpoints name the new leader
+// (updateMemberEndpoints drops them), and a client without member endpoints (only onNewLeaderEvent does).
+func TestAFragmentOfTheOldLeaderIsNotJoinedAcrossALeaderChange(t *testing.T) {
+	const cut = int(cluster.SBEHeaderLength) + int(cluster.SessionMessageHeaderLength) + 5
+	tests := []struct {
+		name    string
+		arrange func(rig *clientRig)
+	}{
+		{name: "the endpoints name the new leader", arrange: func(*clientRig) {}},
+		{name: "the client has no member endpoints", arrange: func(rig *clientRig) {
+			rig.ac.opts.IngressEndpoints = ""
+			rig.ac.memberByIdMap = make(map[int32]*memberIngress)
+		}},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			rig := newConnectedRig(t, 0)
+			endpoints := rig.ac.opts.IngressEndpoints
+			tt.arrange(rig)
+			rec := &messageRecorder{}
+			rig.ac.egressListener = &delegatingListener{listenerRecorder: rig.rec, messages: rec}
+			whole := sessionMessage(testSessionID, "old leader's message")
+			raw := whole.GetBytesArray(0, whole.Capacity())
+			head := atomic.MakeBuffer(raw[:cut])
+			tail := atomic.MakeBuffer(raw[cut:])
+
+			rig.queueFragment(head, frameBegin)
+			rig.ac.Poll()
+			require.Empty(t, rec.payloads, "the message is not complete yet")
+
+			rig.queueFragment(newLeaderFrame(t, testSessionID, 2, 1, endpoints), frameUnfragmented)
+			rig.ac.Poll()
+			require.Equal(t, []int32{1}, rig.rec.newLeaders, "the new leader is announced")
+
+			rig.queueFragment(tail, frameEnd)
+			rig.ac.Poll()
+			assert.Empty(t, rec.payloads, "the end of the old leader's message is not joined with its beginning")
+
+			rig.queue(sessionMessage(testSessionID, "new leader's message"))
+			rig.ac.Poll()
+			assert.Equal(t, []string{"new leader's message"}, rec.payloads, "a whole message after the change is delivered")
+			assert.Empty(t, rig.rec.errors)
+		})
+	}
+}

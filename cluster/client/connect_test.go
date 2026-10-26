@@ -1,9 +1,11 @@
 package client
 
 import (
+	"encoding/binary"
 	"testing"
 	"time"
 
+	"github.com/lirm/aeron-go/cluster"
 	"github.com/lirm/aeron-go/cluster/codecs"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -241,5 +243,59 @@ func TestAnErrorForAnotherConnectIsIgnored(t *testing.T) {
 	}))
 
 	assert.True(t, rig.ac.IsConnected(), "the client connects on its own reply")
+	assert.Equal(t, 1, rig.rec.connects)
+}
+
+// While the client awaits the connect reply, one Poll reads one frame: the frame after the reply waits for the next Poll
+// (cloud-perf 40, review N3).
+func TestTheConnectReplyPollReadsOneFrame(t *testing.T) {
+	const correlationID = 5
+	rig := newConnectingRig(t)
+	rig.ac.Poll() // the publications of the three members
+	rig.driver.openOn(t, endpointOf(0)).connected = true
+	rig.ac.ingressPub = rig.driver.openOn(t, endpointOf(0))
+	rig.ac.state = clientAwaitConnectReply
+	rig.ac.correlationId = correlationID
+	rig.ac.awaitTimeoutTime = rig.clock.Now().UnixMilli() + 3_000
+	rec := &messageRecorder{}
+	rig.ac.egressListener = &delegatingListener{listenerRecorder: rig.rec, messages: rec}
+	rig.queue(
+		sessionEventFrame(t, codecs.SessionEvent{
+			CorrelationId: correlationID, ClusterSessionId: 11, LeadershipTermId: 3, Code: codecs.EventCode.OK,
+		}),
+		sessionMessage(11, "after the reply"),
+	)
+
+	rig.ac.Poll()
+	require.True(t, rig.ac.IsConnected())
+	require.Equal(t, 1, rig.rec.connects)
+	assert.Empty(t, rec.payloads, "the frame after the reply waits for the next Poll")
+
+	rig.ac.Poll()
+	assert.Equal(t, []string{"after the reply"}, rec.payloads)
+}
+
+// The connect request on the wire carries the correlation id the client matches the reply to: the id the driver gave it is
+// in the bytes, and the reply that carries those bytes' id connects (cloud-perf 40, review N1).
+func TestTheConnectRequestCarriesTheCorrelationIdTheReplyMatches(t *testing.T) {
+	const driverID int64 = 0x5EED
+	rig := newConnectingRig(t)
+	rig.ac.nextCorrelationId = func() int64 { return driverID }
+	rig.ac.Poll() // the publications of the three members
+	rig.driver.openOn(t, endpointOf(0)).connected = true
+	rig.ac.Poll() // the connect request goes out on the connected publication
+	require.Equal(t, clientAwaitConnectReply, rig.ac.state)
+
+	pub := rig.driver.openOn(t, endpointOf(0))
+	require.Len(t, pub.offers, 1, "one connect request")
+	wire := pub.offers[0]
+	wireID := int64(binary.LittleEndian.Uint64(wire[cluster.SBEHeaderLength:]))
+	require.Equal(t, driverID, wireID, "the request carries the id the driver gave the client")
+
+	rig.deliver(sessionEventFrame(t, codecs.SessionEvent{
+		CorrelationId: wireID, ClusterSessionId: 11, LeadershipTermId: 3, Code: codecs.EventCode.OK,
+	}))
+
+	assert.True(t, rig.ac.IsConnected(), "the reply to the request connects")
 	assert.Equal(t, 1, rig.rec.connects)
 }

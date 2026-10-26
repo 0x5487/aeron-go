@@ -21,6 +21,8 @@ type fakePublication struct {
 	channel   string
 	connected bool
 	closed    bool
+	// offers are the bytes of the messages offered with Offer, in order (the connect requests).
+	offers [][]byte
 	// sessionHeaders are the session headers of the messages offered, in order: Offer2 is offered the session header
 	// and the payload.
 	sessionHeaders [][]byte
@@ -51,7 +53,8 @@ func (p *fakePublication) result() int64 {
 	}
 }
 
-func (p *fakePublication) Offer(*atomic.Buffer, int32, int32, term.ReservedValueSupplier) int64 {
+func (p *fakePublication) Offer(buf *atomic.Buffer, offset, length int32, _ term.ReservedValueSupplier) int64 {
+	p.offers = append(p.offers, buf.GetBytesArray(offset, length))
 	return p.result()
 }
 
@@ -104,35 +107,44 @@ func (d *fakeDriver) openOn(t *testing.T, endpoint string) *fakePublication {
 	return found[0]
 }
 
+// Frame flags of the egress: a message that fits one frame has both; a fragmented one has BEGIN on its first frame and END
+// on its last (the fragment assembler reads them).
+const (
+	frameBegin        uint8 = 0x80
+	frameEnd          uint8 = 0x40
+	frameUnfragmented       = frameBegin | frameEnd
+)
+
 // fakeEgress is an egress subscription whose channel is bound. The frames a test queues are handed to the client's handler
 // by Poll, fragmentLimit at a time, as the media driver hands over the fragments of the egress stream.
 type fakeEgress struct {
 	closed bool
-	// frames are the payloads waiting to be read, in order: the next Poll reads them.
-	frames []*atomic.Buffer
-	// header is the frame header of every frame handed on: unfragmented, which the fragment assembler delegates whole.
-	header *logbuffer.Header
+	// frames are the frames waiting to be read, in order: the next Poll reads them.
+	frames []egressFrame
+}
+
+// egressFrame is one frame of the egress: its payload and the header that carries its flags.
+type egressFrame struct {
+	payload *atomic.Buffer
+	header  *logbuffer.Header
 }
 
 func (e *fakeEgress) Poll(handler term.FragmentHandler, fragmentLimit int) int {
 	n := 0
 	for n < fragmentLimit && n < len(e.frames) {
-		msg := e.frames[n]
-		handler(msg, 0, msg.Capacity(), e.frameHeader())
+		f := e.frames[n]
+		handler(f.payload, 0, f.payload.Capacity(), f.header)
 		n++
 	}
 	e.frames = e.frames[n:]
 	return n
 }
 
-// frameHeader is the header of frame, made the first time it is needed: one unfragmented frame (BEGIN and END).
-func (e *fakeEgress) frameHeader() *logbuffer.Header {
-	if e.header == nil {
-		frame := atomic.MakeBuffer(make([]byte, logbuffer.DataFrameHeader.Length))
-		logbuffer.FrameFlags(frame, 0, 0xC0)
-		e.header = new(logbuffer.Header).Wrap(frame.Ptr(), frame.Capacity())
-	}
-	return e.header
+// frameHeader is the header of a frame with flags.
+func frameHeader(flags uint8) *logbuffer.Header {
+	frame := atomic.MakeBuffer(make([]byte, logbuffer.DataFrameHeader.Length))
+	logbuffer.FrameFlags(frame, 0, flags)
+	return new(logbuffer.Header).Wrap(frame.Ptr(), frame.Capacity())
 }
 
 func (*fakeEgress) TryResolveChannelEndpointPort() string {
@@ -258,10 +270,18 @@ func (r *clientRig) deliver(buf *atomic.Buffer) {
 	r.ac.onFragment(buf, 0, buf.Capacity(), nil)
 }
 
-// queue leaves frames on the egress for the next Poll to read, as the media driver would have them waiting.
-func (r *clientRig) queue(frames ...*atomic.Buffer) {
+// queue leaves messages that fit one frame on the egress for the next Poll to read, as the media driver would have them
+// waiting.
+func (r *clientRig) queue(messages ...*atomic.Buffer) {
+	for _, m := range messages {
+		r.queueFragment(m, frameUnfragmented)
+	}
+}
+
+// queueFragment leaves one frame with flags on the egress: a fragment of a message, or a whole message.
+func (r *clientRig) queueFragment(payload *atomic.Buffer, flags uint8) {
 	e := r.ac.egressSub.(*fakeEgress)
-	e.frames = append(e.frames, frames...)
+	e.frames = append(e.frames, egressFrame{payload: payload, header: frameHeader(flags)})
 }
 
 // offer offers one message the way the application does.
