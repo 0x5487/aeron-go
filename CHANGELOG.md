@@ -23,6 +23,19 @@ it was made and where it was found (trading-poc experiments under `docs/labs/aer
   experiment 05.
 - **archive tests**: the mock-based unit tests run when no media driver is available (bac340b); `TestMain` returned
   before `m.Run()` and every test was skipped silently. The rotted control tests are fixed.
+- **cluster client**: a closed publication of a member is made again (cloud-perf 40).
+  `onNewLeaderEvent` closed only `ingressPub`, so the old leader's entry in `memberByIdMap` kept a closed but non-nil
+  publication; when the leader came back to that member (1 -> 0 -> 1) `updateMemberEndpoints` and `createPublications`
+  saw a non-nil publication, did not make a new one, and used the closed one, which never connects. Now a new leader
+  closes the publication of every member (`member.close()`, the entry becomes nil), and a closed publication counts as
+  none in `updateMemberEndpoints` and `createPublications`. Java closes the whole member table on `onNewLeader` and on
+  `REDIRECT`. Found in trading-poc `docs/labs/writer-reconnect/README.md`: after each leader change a writer got no
+  answer for up to 15 s and returned 504.
+- **cluster client**: after `NEW_LEADER` the new leader's publication, which has not connected yet, is no longer taken
+  for a disconnect. The client leaves `Connected` for the new state `AwaitNewLeaderConnection`, keeps the session,
+  polls the egress, and is `Connected` again when the publication connects (`OnConnect` is not called: the session is
+  the same). It waits 5 s at most (Java: `AWAIT_NEW_LEADER_CONNECTION`, `messageTimeoutNs`), then the client closes and
+  `OnError` says so. Before, `Poll` called `OnDisconnect` and opened a new session at once.
 
 ### Added
 
@@ -37,6 +50,14 @@ it was made and where it was found (trading-poc experiments under `docs/labs/aer
 
 ### Changed
 
+- **cluster client**: the client no longer waits and retries by itself; it closes and tells the listener (cloud-perf 40).
+  A timeout waiting for the ingress publication (5 s) or the connect reply (3 s), an `ERROR` event, and
+  `AUTHENTICATION_REJECTED` used to put the client in `Disconnected` and retry after a fixed 5 s, 30 s or 60 s. Now
+  each of them calls `OnError` with the reason and sets the client closed (`IsClosed()` is true); the owner calls
+  `Close` and builds a new client, as with the `CLOSED` event. Java closes the client on these timeouts. The state
+  `Disconnected` and `nextRetryConnectTime` are gone. The two reconnect policies of trading-poc (a writer or bridge
+  rebuilds after N seconds, and aeron-go waits 30 s) are one owner now. `ingressPublication` and `egressSubscription`
+  are the interfaces the client uses of the driver objects; the tests replace them.
 - **cluster**: `ClusteredServiceAgent.ElectionState` keeps the id and registration id of the counter it found and checks
   them before each read instead of walking the media driver's counters on every call. The check is O(1) and allocates
   nothing: the record is allocated, its type is `ELECTION_STATE_TYPE_ID`, the cluster id in its key is this member's, and

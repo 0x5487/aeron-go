@@ -37,43 +37,77 @@ var marshaller = codecs.NewSbeGoMarshaller()
 
 var TemporaryError = errors.New("temporary error")
 
+// ingressPublication is the part of *aeron.Publication the client uses. It is the seam to the media driver: the tests
+// replace the publications the client creates.
+type ingressPublication interface {
+	IsConnected() bool
+	IsClosed() bool
+	Close() error
+	Channel() string
+	Offer(buffer *atomic.Buffer, offset, length int32, reservedValueSupplier term.ReservedValueSupplier) int64
+	Offer2(
+		bufferOne *atomic.Buffer, offsetOne, lengthOne int32,
+		bufferTwo *atomic.Buffer, offsetTwo, lengthTwo int32,
+		reservedValueSupplier term.ReservedValueSupplier,
+	) int64
+}
+
+// egressSubscription is the part of *aeron.Subscription the client uses (the other seam to the media driver).
+type egressSubscription interface {
+	Poll(handler term.FragmentHandler, fragmentLimit int) int
+	TryResolveChannelEndpointPort() string
+	Close() error
+}
+
 type AeronCluster struct {
-	opts                 *Options
-	aeronClient          *aeron.Aeron
-	egressSub            *aeron.Subscription
-	ingressChannel       *aeron.ChannelUri
-	ingressPub           *aeron.Publication
-	clusterSessionId     int64
-	leadershipTermId     int64
-	leaderMemberId       int32
-	memberByIdMap        map[int32]*memberIngress
-	fragmentAssembler    *aeron.FragmentAssembler
-	egressHandler        term.FragmentHandler // ac.fragmentAssembler.OnFragment, bound in bindEgressHandler
-	egressListener       EgressListener
-	sessionMsgHdrBuffer  *atomic.Buffer
-	keepAliveBuffer      *atomic.Buffer
-	state                clientState
-	correlationId        int64
-	nextRetryConnectTime int64
-	awaitTimeoutTime     int64
+	opts                *Options
+	aeronClient         *aeron.Aeron
+	egressSub           egressSubscription
+	ingressChannel      *aeron.ChannelUri
+	ingressPub          ingressPublication
+	clusterSessionId    int64
+	leadershipTermId    int64
+	leaderMemberId      int32
+	memberByIdMap       map[int32]*memberIngress
+	fragmentAssembler   *aeron.FragmentAssembler
+	egressHandler       term.FragmentHandler // ac.fragmentAssembler.OnFragment, bound in bindEgressHandler
+	egressListener      EgressListener
+	sessionMsgHdrBuffer *atomic.Buffer
+	keepAliveBuffer     *atomic.Buffer
+	state               clientState
+	correlationId       int64
+	awaitTimeoutTime    int64
+	// addPublication creates an ingress publication on channel; the tests replace it.
+	addPublication func(channel string) (ingressPublication, error)
+	// clock is the time source of the timeouts; the tests replace it.
+	clock func() time.Time
 }
 
 type memberIngress struct {
 	memberId    int32
 	endpoint    string
-	publication *aeron.Publication
+	publication ingressPublication
 }
 
 type clientState int8
 
 const (
-	clientDisconnected clientState = iota
-	clientCreatePublications
+	clientCreatePublications clientState = iota
 	clientAwaitPublicationConnected
 	clientAwaitConnectReply
 	clientConnected
+	// clientAwaitNewLeaderConnection: the session is open and the cluster announced a new leader; the ingress
+	// publication to the new leader is not connected yet (Java: AWAIT_NEW_LEADER_CONNECTION).
+	clientAwaitNewLeaderConnection
+	// clientClosed: the client is finished. It gave up (a timeout, ERROR, AUTHENTICATION_REJECTED; the listener's OnError
+	// says why) or the cluster closed the session. It never connects again by itself: the owner calls Close and builds a
+	// new client.
 	clientClosed
 )
+
+// newLeaderConnectTimeout is how long the client waits for the ingress publication of a new leader to connect
+// (Java: AeronCluster.Context.messageTimeoutNs, default 5 s).
+const newLeaderConnectTimeout = 5 * time.Second
 
 const (
 	protocolMajorVersion = 0
@@ -122,10 +156,12 @@ func NewAeronCluster(
 		leaderMemberId:      cluster.NullValue,
 		memberByIdMap:       make(map[int32]*memberIngress),
 		egressListener:      egressListener,
-		state:               clientDisconnected,
+		state:               clientCreatePublications,
 		sessionMsgHdrBuffer: sessionMsgHdrBuf,
 		keepAliveBuffer:     codecs.MakeClusterMessageBuffer(cluster.SessionKeepAliveTemplateId, 16),
+		clock:               time.Now,
 	}
+	client.addPublication = client.addDriverPublication
 	client.bindEgressHandler()
 	client.updateMemberEndpoints(options.IngressEndpoints)
 
@@ -154,31 +190,24 @@ func (ac *AeronCluster) IsClosed() bool {
 
 func (ac *AeronCluster) Poll() int {
 	switch ac.state {
-	case clientDisconnected:
-		if time.Now().UnixMilli() > ac.nextRetryConnectTime {
-			ac.state = clientCreatePublications
-		}
 	case clientCreatePublications:
 		ret, err := ac.createPublications()
 		if err != nil {
-			logger.Warningf("error from createPublications %w", err)
+			logger.Warningf("error from createPublications %v", err)
 		}
 		return ret
 	case clientAwaitPublicationConnected:
 		ret, err := ac.awaitPublicationConnected()
 		if err != nil {
-			logger.Warningf("error from awaitPublicationConnected %w", err)
+			logger.Warningf("error from awaitPublicationConnected %v", err)
 		}
 		return ret
 	case clientAwaitConnectReply:
-		now := time.Now().UnixMilli()
-		if ac.ingressPub.IsConnected() && now < ac.awaitTimeoutTime {
+		if ac.ingressPub.IsConnected() && ac.nowMillis() < ac.awaitTimeoutTime {
 			return ac.pollEgress(1)
-		} else {
-			logger.Warningf("timed out waiting for session connect reply")
-			ac.state = clientDisconnected
-			ac.nextRetryConnectTime = now + (30 * time.Second).Milliseconds()
 		}
+		ac.giveUp("timed out waiting for session connect reply")
+		return 1
 	case clientConnected:
 		if ac.ingressPub.IsConnected() {
 			return ac.pollEgress(10)
@@ -187,8 +216,35 @@ func (ac *AeronCluster) Poll() int {
 			ac.egressListener.OnDisconnect(ac, "ingress publication disconnected")
 			ac.state = clientCreatePublications
 		}
+	case clientAwaitNewLeaderConnection:
+		work := ac.pollEgress(10) // another new leader, or the session closing, may be in it
+		if ac.state != clientAwaitNewLeaderConnection {
+			return work
+		}
+		if ac.ingressPub != nil && ac.ingressPub.IsConnected() {
+			ac.state = clientConnected
+			return work + 1
+		}
+		if ac.nowMillis() >= ac.awaitTimeoutTime {
+			ac.giveUp(fmt.Sprintf("timed out waiting for the ingress publication of the new leader (leaderMemberId=%d) to connect",
+				ac.leaderMemberId))
+			return work + 1
+		}
+		return work
 	}
 	return 0
+}
+
+func (ac *AeronCluster) nowMillis() int64 {
+	return ac.clock().UnixMilli()
+}
+
+// giveUp ends the client: it tells the listener why through OnError and becomes closed. The client does not schedule a
+// retry; reconnecting is the owner's decision (Java closes the client the same way when it times out).
+func (ac *AeronCluster) giveUp(reason string) {
+	logger.Warningf("cluster client gives up: %s (state=%d)", reason, ac.state)
+	ac.state = clientClosed
+	ac.egressListener.OnError(ac, reason)
 }
 
 func (ac *AeronCluster) Offer(buffer *atomic.Buffer, offset, length int32) int64 {
@@ -258,12 +314,10 @@ func (ac *AeronCluster) updateMemberEndpoints(endpoints string) {
 				ac.memberByIdMap[member.memberId] = member
 			} else if address != member.endpoint {
 				member.endpoint = address
-				if member.publication != nil {
-					member.close()
-				}
+				member.close()
 			}
 			if member.memberId == ac.leaderMemberId {
-				if member.publication == nil {
+				if !member.hasOpenPublication() {
 					pub, err := ac.createIngressPublication(address)
 					if err == nil {
 						member.publication = pub
@@ -283,7 +337,7 @@ func (ac *AeronCluster) updateMemberEndpoints(endpoints string) {
 func (ac *AeronCluster) createPublications() (int, error) {
 	if len(ac.memberByIdMap) > 0 {
 		for _, member := range ac.memberByIdMap {
-			if member.publication == nil {
+			if !member.hasOpenPublication() {
 				pub, err := ac.createIngressPublication(member.endpoint)
 				if err != nil {
 					return 0, err
@@ -299,22 +353,34 @@ func (ac *AeronCluster) createPublications() (int, error) {
 		ac.ingressPub = pub
 	}
 	ac.state = clientAwaitPublicationConnected
-	ac.awaitTimeoutTime = time.Now().UnixMilli() + (5 * time.Second).Milliseconds()
+	ac.awaitTimeoutTime = ac.nowMillis() + (5 * time.Second).Milliseconds()
 	return 1, nil
 }
 
-func (ac *AeronCluster) createIngressPublication(endpoint string) (*aeron.Publication, error) {
+func (ac *AeronCluster) createIngressPublication(endpoint string) (ingressPublication, error) {
 	if ac.ingressChannel.IsUdp() {
 		ac.ingressChannel.Set("endpoint", endpoint)
 	}
 	channel := ac.ingressChannel.String()
 	logger.Debugf("createIngressPublication - endpoint=%s isUdp=%v isExclusive=%v",
 		endpoint, ac.ingressChannel.IsUdp(), ac.opts.IsIngressExclusive)
+	return ac.addPublication(channel)
+}
+
+// addDriverPublication adds the ingress publication to the media driver. A failure returns a nil interface, not an
+// interface holding a nil *aeron.Publication.
+func (ac *AeronCluster) addDriverPublication(channel string) (ingressPublication, error) {
+	var pub *aeron.Publication
+	var err error
 	if ac.opts.IsIngressExclusive {
-		return ac.aeronClient.AddExclusivePublication(channel, ac.opts.IngressStreamId)
+		pub, err = ac.aeronClient.AddExclusivePublication(channel, ac.opts.IngressStreamId)
 	} else {
-		return ac.aeronClient.AddPublication(channel, ac.opts.IngressStreamId)
+		pub, err = ac.aeronClient.AddPublication(channel, ac.opts.IngressStreamId)
 	}
+	if err != nil {
+		return nil, err
+	}
+	return pub, nil
 }
 
 func (ac *AeronCluster) awaitPublicationConnected() (int, error) {
@@ -323,12 +389,10 @@ func (ac *AeronCluster) awaitPublicationConnected() (int, error) {
 		// TODO: Is this an error or success condition?
 		return 0, nil
 	}
-	now := time.Now().UnixMilli()
+	now := ac.nowMillis()
 	if now > ac.awaitTimeoutTime {
-		ac.state = clientDisconnected
-		// close publications? shouldn't be necessary unless we've hit some bug
-		ac.nextRetryConnectTime = now + (30 * time.Second).Milliseconds()
-		return 0, errors.New("timed out waiting for connected publication")
+		ac.giveUp("timed out waiting for connected publication")
+		return 0, nil
 	}
 	if len(ac.memberByIdMap) > 0 {
 		for _, member := range ac.memberByIdMap {
@@ -439,18 +503,17 @@ func (ac *AeronCluster) onNewLeaderEvent(buffer *atomic.Buffer, offset, length i
 	buffer.WriteBytes(&buf, offset, length)
 	if err := e.Decode(marshaller, &buf, version, blockLength, true); err != nil {
 		logger.Errorf("new leader event decode error: %v", err)
-	} else if ac.state == clientConnected && e.ClusterSessionId == ac.clusterSessionId {
+	} else if ac.hasSession() && e.ClusterSessionId == ac.clusterSessionId {
 		ac.leadershipTermId = e.LeadershipTermId
 		ac.leaderMemberId = e.LeaderMemberId
 		ac.sessionMsgHdrBuffer.PutInt64(cluster.SBEHeaderLength, e.LeadershipTermId)
 		ac.keepAliveBuffer.PutInt64(cluster.SBEHeaderLength, e.LeadershipTermId)
 		if ac.opts.IngressEndpoints != "" {
-			if err := ac.ingressPub.Close(); err != nil {
-				logger.Warningf("error closing ingress publication: %v", err)
-			}
-			ac.ingressPub = nil
+			ac.closeAllPublications()
 			ac.updateMemberEndpoints(string(e.IngressEndpoints))
 		}
+		ac.state = clientAwaitNewLeaderConnection
+		ac.awaitTimeoutTime = ac.nowMillis() + newLeaderConnectTimeout.Milliseconds()
 		ac.fragmentAssembler.Clear()
 		ac.egressListener.OnNewLeader(ac, e.LeadershipTermId, e.LeaderMemberId)
 	} else {
@@ -485,15 +548,11 @@ func (ac *AeronCluster) onSessionEvent(buffer *atomic.Buffer, offset, length int
 			ac.closeNonLeaderPublications()
 			ac.state = clientAwaitPublicationConnected
 		case codecs.EventCode.ERROR:
-			ac.egressListener.OnError(ac, string(e.Detail))
-			ac.state = clientDisconnected
-			ac.nextRetryConnectTime = time.Now().UnixMilli() + (5 * time.Second).Milliseconds()
+			ac.giveUp(string(e.Detail))
 		case codecs.EventCode.AUTHENTICATION_REJECTED:
-			ac.egressListener.OnError(ac, fmt.Sprintf("authentication rejected (%s)", string(e.Detail)))
-			ac.state = clientDisconnected
-			ac.nextRetryConnectTime = time.Now().UnixMilli() + time.Minute.Milliseconds()
+			ac.giveUp(fmt.Sprintf("authentication rejected (%s)", string(e.Detail)))
 		}
-	} else if ac.state == clientConnected && e.ClusterSessionId == ac.clusterSessionId {
+	} else if ac.hasSession() && e.ClusterSessionId == ac.clusterSessionId {
 		if e.Code == codecs.EventCode.CLOSED {
 			ac.egressListener.OnDisconnect(ac, string(e.Detail))
 			ac.state = clientClosed
@@ -506,6 +565,11 @@ func (ac *AeronCluster) onSessionEvent(buffer *atomic.Buffer, offset, length int
 		logger.Debugf("ignored session event - state=%v thisSessionId=%d targetSessionId=%d code=%d (%s)",
 			ac.state, ac.clusterSessionId, e.ClusterSessionId, e.Code, string(e.Detail))
 	}
+}
+
+// hasSession says the session is open: connected, or waiting for the ingress publication of a new leader.
+func (ac *AeronCluster) hasSession() bool {
+	return ac.state == clientConnected || ac.state == clientAwaitNewLeaderConnection
 }
 
 func (ac *AeronCluster) closeNonLeaderPublications() {
@@ -524,7 +588,7 @@ func (ac *AeronCluster) onSessionMessage(buffer *atomic.Buffer, offset, length i
 	leadershipTermId := buffer.GetInt64(offset)
 	clusterSessionId := buffer.GetInt64(offset + 8)
 	timestamp := buffer.GetInt64(offset + 16)
-	if ac.state != clientConnected {
+	if !ac.hasSession() {
 		logger.Debugf("received unexpected session message - leadershipTermId=%d clusterSessionId=%d state=%v",
 			leadershipTermId, clusterSessionId, ac.state)
 	} else if clusterSessionId == ac.clusterSessionId {
@@ -546,6 +610,27 @@ func (ac *AeronCluster) sendCloseSession() {
 		}
 		ac.opts.IdleStrategy.Idle(0)
 	}
+}
+
+// closeAllPublications closes the ingress publication of every member and forgets them, so that a member that leads
+// again later gets a new one (a closed publication never connects). Java closes the whole member table the same way
+// (AeronCluster.updateMemberEndpoints).
+func (ac *AeronCluster) closeAllPublications() {
+	for _, member := range ac.memberByIdMap {
+		member.close()
+	}
+	if ac.ingressPub != nil {
+		// not a member's publication: the client was built without endpoints
+		if err := ac.ingressPub.Close(); err != nil {
+			logger.Warningf("error closing ingress publication: %v", err)
+		}
+	}
+	ac.ingressPub = nil
+}
+
+// hasOpenPublication says the member has a publication that is not closed.
+func (member *memberIngress) hasOpenPublication() bool {
+	return member.publication != nil && !member.publication.IsClosed()
 }
 
 func (member *memberIngress) close() {
