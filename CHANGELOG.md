@@ -43,6 +43,11 @@ it was made and where it was found (trading-poc experiments under `docs/labs/aer
 
 ### Added
 
+- **aeron**: `FindPublication`, `FindSubscription` and `FindCounter` return `*RegistrationError` (`RegistrationID`,
+  `Code`, `Message`) for a driver rejection instead of a formatted string; `Error()` keeps the same text. Callers read the
+  driver code with `errors.As` and compare it with `command.ErrorCodeResourceTemporarilyUnavailable`, so a retry is decided by
+  the code, not the text. Found in trading-poc cloud-perf 75: a probe's replay subscription met the previous probe's endpoint
+  still `CLOSING` (code 10) and the bisection gave up.
 - **archive**: `DefaultPollInterval` and `Options.SetPollInterval` (5ed7628). The 50 ms sleep between control-response
   polls was a literal and the latency floor of every synchronous Archive call; the default stays 50 ms.
 - **aeron**: `Context.InterServiceTimeout` reaches the client conductor (28c3dd0); unset, the driver's client liveness

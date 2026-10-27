@@ -441,7 +441,7 @@ func (cc *ClientConductor) FindPublication(registrationID int64) (*Publication, 
 			pub.publication = publication
 			return publication, nil
 		case RegistrationStatus.ErroredMediaDriver:
-			return nil, fmt.Errorf("error on %d: %d: %s", registrationID, pub.errorCode, pub.errorMessage)
+			return nil, &RegistrationError{RegistrationID: registrationID, Code: pub.errorCode, Message: pub.errorMessage}
 		default:
 			return nil, errors.New("unknown registration status")
 		}
@@ -531,13 +531,25 @@ func (cc *ClientConductor) FindSubscription(registrationID int64) (*Subscription
 		case RegistrationStatus.RegisteredMediaDriver:
 			return sub.subscription, nil
 		case RegistrationStatus.ErroredMediaDriver:
-			return nil, fmt.Errorf("error on %d: %d: %s", registrationID, sub.errorCode, sub.errorMessage)
+			return nil, &RegistrationError{RegistrationID: registrationID, Code: sub.errorCode, Message: sub.errorMessage}
 		default:
 			return nil, errors.New("unknown registration status")
 		}
 	}
 
 	return nil, fmt.Errorf("registration ID %d cannot be found", registrationID)
+}
+
+// RegistrationError is the driver's rejection of a registration (publication, subscription or counter). Code is the
+// driver's error code (command.ErrorCode*); Message is the driver's text. Callers use errors.As to read the code.
+type RegistrationError struct {
+	RegistrationID int64
+	Code           int32
+	Message        string
+}
+
+func (e *RegistrationError) Error() string {
+	return fmt.Sprintf("error on %d: %d: %s", e.RegistrationID, e.Code, e.Message)
 }
 
 func timeoutExceeded(timeOfRegistration int64, driverTimeoutNs int64) error {
@@ -749,8 +761,7 @@ func (cc *ClientConductor) FindCounter(registrationID int64) (*Counter, error) {
 		counterDef.counter = counter
 		return counter, nil
 	case RegistrationStatus.ErroredMediaDriver:
-		return nil, fmt.Errorf("error on %d: %d: %s",
-			registrationID, counterDef.errorCode, counterDef.errorMessage)
+		return nil, &RegistrationError{RegistrationID: registrationID, Code: counterDef.errorCode, Message: counterDef.errorMessage}
 	default:
 		return nil, errors.New("unknown registration status")
 	}
