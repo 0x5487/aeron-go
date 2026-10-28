@@ -40,6 +40,11 @@ it was made and where it was found (trading-poc experiments under `docs/labs/aer
   waited for the connect reply while `now < deadline` and so gave up exactly at the deadline, while the wait for the
   publication gives up only after it (`now > deadline`): two waits of one client read the same instant differently. It
   now reads the egress once more at the deadline and gives up one millisecond later.
+- **cluster**: `ClusteredServiceAgent.ElectionState` is safe to call from several goroutines (cloud-perf 108). The kept
+  election state counter was plain fields, so the service goroutine answering a query and the bridge goroutine asking for
+  its term read and wrote them at the same time. The kept counter is now one atomic pointer to a value that is never
+  changed (its id and registration id together), so a caller never mixes two counters. Found in trading-poc
+  `docs/tickets/cloud-perf/issues/108-bridge-active-only-when-caught-up.md`.
 
 ### Added
 

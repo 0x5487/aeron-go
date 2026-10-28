@@ -1,6 +1,8 @@
 package cluster
 
 import (
+	"sync"
+	goatomic "sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -61,6 +63,38 @@ func TestElectionStateReadsTheCounterOfThisClusterAtEveryCall(t *testing.T) {
 	got, ok = agent.ElectionState()
 	require.True(t, ok)
 	assert.Equal(t, ElectionState(0), got, "an election state of INIT")
+}
+
+// Two goroutines read the election state at once: the service goroutine answers a query through it while the bridge
+// goroutine asks for its term (trading-poc cloud-perf 108). The kept counter is one value, so the two must see it without
+// a race and both must find the closed election.
+func TestElectionStateIsSafeFromTwoGoroutines(t *testing.T) {
+	t.Parallel()
+	const clusterID = int32(7)
+	reader, _ := electionCounters(t,
+		[]int32{electionStateCounterTypeId}, []int32{clusterID}, []int64{int64(ElectionStateClosed)})
+	agent := electionAgent(t, clusterID, reader)
+
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	var wrong goatomic.Int32
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			for j := 0; j < 1000; j++ {
+				got, ok := agent.ElectionState()
+				if !ok || got != ElectionStateClosed {
+					wrong.Add(1)
+				}
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	assert.Zero(t, wrong.Load(), "both goroutines read the closed election")
 }
 
 // A counter of another cluster on the same media driver is not this member's election state: the key's cluster id

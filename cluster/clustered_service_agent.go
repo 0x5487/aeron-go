@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	goatomic "sync/atomic"
 	"time"
 
 	"github.com/lirm/aeron-go/aeron"
@@ -48,7 +49,7 @@ type ClusteredServiceAgent struct {
 	opts                     *Options
 	proxy                    *consensusModuleProxy
 	counters                 *counters.Reader
-	electionCounter          electionStateCounter
+	electionCounter          goatomic.Pointer[electionStateCounter]
 	serviceAdapter           *serviceAdapter
 	logAdapter               *boundedLogAdapter
 	markFile                 *ClusterMarkFile

@@ -17,9 +17,9 @@ const ElectionStateClosed ElectionState = 17
 // consensus module of a cluster publishes its election state in (AeronCounters.CLUSTER_ELECTION_STATE_TYPE_ID).
 const electionStateCounterTypeId = 207
 
-// electionStateCounter is the election state counter ElectionState found last: its id and its registration id.
+// electionStateCounter is the election state counter ElectionState found last: its id and its registration id. A value is
+// never changed after it is stored, so several goroutines may read the same one (see ClusteredServiceAgent.electionCounter).
 type electionStateCounter struct {
-	known          bool
 	id             int32
 	registrationId int64
 }
@@ -40,26 +40,27 @@ type electionStateCounter struct {
 // ok is false when there is no such counter (yet): the state is unknown. Unknown is not ElectionStateClosed, so a caller
 // that answers only in CLOSED must not answer on it.
 //
-// The kept counter is not synchronised: ElectionState must be called from one goroutine at a time. The trading-poc query
-// gate calls it only from the service goroutine; a caller on several goroutines must serialise the calls.
+// Several goroutines may call it at the same time: the kept counter is one atomic pointer to a value that is never
+// changed, so a caller reads a whole id and registration id, never a mix. The trading-poc query gate reads it from the
+// service goroutine and its bridge reads it from its own goroutine (cloud-perf 108).
 func (agent *ClusteredServiceAgent) ElectionState() (ElectionState, bool) {
-	kept := &agent.electionCounter
-	if !kept.known || !agent.keptElectionCounterIsValid() {
+	kept := agent.electionCounter.Load()
+	if kept == nil || !agent.keptElectionCounterIsValid(kept) {
 		id := agent.counters.FindCounter(electionStateCounterTypeId, func(keyBuffer *atomic.Buffer) bool {
 			return keyBuffer.GetInt32(0) == agent.opts.ClusterId
 		})
 		if id == counters.NullCounterId {
-			kept.known = false
+			agent.electionCounter.Store(nil)
 			return 0, false
 		}
-		*kept = electionStateCounter{known: true, id: id, registrationId: agent.counters.GetCounterRegistrationId(id)}
+		kept = &electionStateCounter{id: id, registrationId: agent.counters.GetCounterRegistrationId(id)}
+		agent.electionCounter.Store(kept)
 	}
 	return ElectionState(agent.counters.GetCounterValue(kept.id)), true
 }
 
 // keptElectionCounterIsValid reports whether the kept id still names this member's election state counter.
-func (agent *ClusteredServiceAgent) keptElectionCounterIsValid() bool {
-	kept := &agent.electionCounter
+func (agent *ClusteredServiceAgent) keptElectionCounterIsValid(kept *electionStateCounter) bool {
 	if !agent.counters.IsCounterAllocated(kept.id) ||
 		agent.counters.GetCounterTypeId(kept.id) != electionStateCounterTypeId ||
 		agent.counters.GetCounterRegistrationId(kept.id) != kept.registrationId {
