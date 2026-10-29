@@ -15,7 +15,11 @@
 package codecs
 
 import (
+	"math"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 var channel = "aeron:udp?endpoint=localhost:20121"
@@ -43,4 +47,13 @@ func TestEncoders(t *testing.T) {
 		t.Logf("StartRecordingRequestPacket() failed length check: %d", len(packet))
 		t.Fail()
 	}
+}
+
+// The archive encoders pass the range check: an id outside its schema range is an error, not bytes on the wire
+// (ConnectRequestPacket).
+func TestConnectRequestPacketRejectsOutOfRangeCorrelationId(t *testing.T) {
+	_, err := ConnectRequestPacket(NewSbeGoMarshaller(), math.MinInt64, stream, channel)
+
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "Range check failed on c.CorrelationId")
 }

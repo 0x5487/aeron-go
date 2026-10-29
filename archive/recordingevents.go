@@ -89,6 +89,7 @@ func (rea *RecordingEventsAdapter) reFragmentHandler(listeners *ArchiveListeners
 		if listeners.ErrorListener != nil {
 			listeners.ErrorListener(err2)
 		}
+		return
 	}
 
 	switch hdr.TemplateId {

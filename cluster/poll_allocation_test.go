@@ -217,7 +217,8 @@ func TestBoundedLogAdapterRejectsOutOfRangeSessionOpen(t *testing.T) {
 		flags: testFlagUnfragmented,
 	}}}
 
-	assert.Equal(t, 1, adapter.poll(math.MaxInt64))
+	require.NotPanics(t, func() { adapter.poll(math.MaxInt64) },
+		"an out-of-schema session open must be rejected before the agent applies it")
 	assert.Zero(t, agent.clusterTime)
 	assert.Empty(t, agent.sessions)
 }

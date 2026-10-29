@@ -50,8 +50,9 @@ it was made and where it was found (trading-poc experiments under `docs/labs/aer
   deleted from `archive.Options`, `cluster.Options` and `cluster/client.Options` (cloud-perf 118). The Archive client kept
   the option in a package-level variable that every `Poll` wrote and every fragment handler read, so two Archive clients
   polled from two goroutines raced on it (`-race`). The Archive default was `false`, so a control response outside its
-  schema, such as an unknown `ControlResponse` code, was accepted; it is now an error for `ErrorListener`. Found in
-  trading-poc cloud-perf 118.
+  schema, such as an unknown `ControlResponse` code, was accepted; it is now an error for `ErrorListener`. A decode error
+  ends the fragment: it is reported once, and the half-decoded value is not delivered to a listener and does not set a
+  result. Found in trading-poc cloud-perf 118.
 
 ### Added
 

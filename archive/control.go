@@ -212,6 +212,7 @@ func controlFragmentHandler(context interface{}, buffer *atomic.Buffer, offset i
 			if pollContext.control.archive.Listeners.ErrorListener != nil {
 				pollContext.control.archive.Listeners.ErrorListener(err2)
 			}
+			return
 		}
 		if pollContext.control.archive.Listeners.RecordingSignalListener != nil {
 			pollContext.control.archive.Listeners.RecordingSignalListener(recordingSignalEvent)
@@ -251,6 +252,7 @@ func ConnectionControlFragmentHandler(context *PollContext, buffer *atomic.Buffe
 		if context.control.archive.Listeners.ErrorListener != nil {
 			context.control.archive.Listeners.ErrorListener(err2)
 		}
+		return
 	}
 
 	switch hdr.TemplateId {
@@ -263,7 +265,7 @@ func ConnectionControlFragmentHandler(context *PollContext, buffer *atomic.Buffe
 			if context.control.archive.Listeners.ErrorListener != nil {
 				context.control.archive.Listeners.ErrorListener(err2)
 			}
-			logger.Debugf("ConnectionControlFragmentHandler failed to decode control response: %w", err)
+			logger.Debugf("ConnectionControlFragmentHandler failed to decode control response: %v", err)
 			return
 		}
 
@@ -315,6 +317,7 @@ func ConnectionControlFragmentHandler(context *PollContext, buffer *atomic.Buffe
 			if context.control.archive.Listeners.ErrorListener != nil {
 				context.control.archive.Listeners.ErrorListener(err2)
 			}
+			return
 		}
 
 		logger.Infof("ControlFragmentHandler: challenge:%s, session:%d, correlationID:%d", challenge.EncodedChallenge, challenge.ControlSessionId, challenge.CorrelationId)
@@ -431,11 +434,12 @@ func (control *Control) errorResponseFragmentHandler(buffer *atomic.Buffer, offs
 	marshaller := codecs.NewSbeGoMarshaller()
 	if err := hdr.Decode(marshaller, buf); err != nil {
 		// Not much to be done here as we can't correlate
-		err2 := fmt.Errorf("ConnectionControlFragmentHandler() failed to decode control message header: %w", err)
+		err2 := fmt.Errorf("errorResponseFragmentHandler() failed to decode control message header: %w", err)
 		// Call the global error handler, ugly, but it's all we've got
 		if pollContext.control.archive.Listeners.ErrorListener != nil {
 			pollContext.control.archive.Listeners.ErrorListener(err2)
 		}
+		return
 	}
 
 	switch hdr.TemplateId {
@@ -470,6 +474,7 @@ func (control *Control) errorResponseFragmentHandler(buffer *atomic.Buffer, offs
 			if pollContext.control.archive.Listeners.ErrorListener != nil {
 				pollContext.control.archive.Listeners.ErrorListener(err2)
 			}
+			return
 		}
 
 		// If this was for us then that's bad
@@ -484,10 +489,11 @@ func (control *Control) errorResponseFragmentHandler(buffer *atomic.Buffer, offs
 
 		if err := rd.Decode(marshaller, buf, hdr.Version, hdr.BlockLength, rangeCheck); err != nil {
 			// Not much to be done here as we can't correlate
-			err2 := fmt.Errorf("errorResponseFragmentHandler failed to decode recordingSubscription: %w", err)
+			err2 := fmt.Errorf("errorResponseFragmentHandler failed to decode recordingDescriptor: %w", err)
 			if pollContext.control.archive.Listeners.ErrorListener != nil {
 				pollContext.control.archive.Listeners.ErrorListener(err2)
 			}
+			return
 		}
 
 		// If this was for us then that's bad
@@ -506,6 +512,7 @@ func (control *Control) errorResponseFragmentHandler(buffer *atomic.Buffer, offs
 			if pollContext.control.archive.Listeners.ErrorListener != nil {
 				pollContext.control.archive.Listeners.ErrorListener(err2)
 			}
+			return
 		}
 
 		// If this was for us then that's bad
@@ -523,6 +530,7 @@ func (control *Control) errorResponseFragmentHandler(buffer *atomic.Buffer, offs
 			if pollContext.control.archive.Listeners.ErrorListener != nil {
 				pollContext.control.archive.Listeners.ErrorListener(err2)
 			}
+			return
 		}
 		// Only our own session's signals are ours; once, not twice.
 		if rse.ControlSessionId == pollContext.control.archive.SessionID {
