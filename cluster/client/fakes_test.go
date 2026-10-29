@@ -13,6 +13,9 @@ import (
 	"github.com/lirm/aeron-go/cluster"
 	"github.com/lirm/aeron-go/cluster/codecs"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 // fakePublication stands for the ingress publication the media driver would give the client. It is connected only when a
@@ -180,6 +183,22 @@ func (r *listenerRecorder) OnMessage(*AeronCluster, int64, *atomic.Buffer, int32
 }
 
 const testSessionID int64 = 7
+
+// captureClientLogs sends the client logger to an observer for the duration of the test, as the cluster tests do. A
+// dropped egress message is reported by exactly one Error line (AeronCluster.onSessionEvent and onNewLeaderEvent), so
+// the tests count these lines.
+func captureClientLogs(t *testing.T) *observer.ObservedLogs {
+	t.Helper()
+	core, logs := observer.New(zapcore.DebugLevel)
+	prevLogger, prevSugar := logger.Logger(), logger.Sugar()
+	logger.SetLogger(zap.New(core))
+	logger.SetSugar(zap.New(core).Sugar())
+	t.Cleanup(func() {
+		logger.SetLogger(prevLogger)
+		logger.SetSugar(prevSugar)
+	})
+	return logs
+}
 
 // clientRig is a client of a three member cluster, with every seam to the driver replaced.
 type clientRig struct {

@@ -74,11 +74,20 @@ func (s *leadershipTermRecorder) OnNewLeadershipTermEvent(
 type sessionRecorder struct {
 	ClusteredService
 	closeCalls   int
+	closes       []sessionClose
 	messageCalls int
 }
 
-func (s *sessionRecorder) OnSessionClose(ClientSession, int64, codecs.CloseReasonEnum) {
+// sessionClose is one OnSessionClose the agent applied, with the values it passed.
+type sessionClose struct {
+	session   ClientSession
+	timestamp int64
+	reason    codecs.CloseReasonEnum
+}
+
+func (s *sessionRecorder) OnSessionClose(session ClientSession, timestamp int64, reason codecs.CloseReasonEnum) {
 	s.closeCalls++
+	s.closes = append(s.closes, sessionClose{session: session, timestamp: timestamp, reason: reason})
 }
 
 func (s *sessionRecorder) OnSessionMessage(
@@ -258,6 +267,41 @@ func TestBoundedLogAdapterRejectsOutOfRangeSessionClose(t *testing.T) {
 			assert.Equal(t, 1, logs.FilterLevelExact(zapcore.ErrorLevel).Len(), "the rejection is reported once")
 		})
 	}
+}
+
+// A legal session close is applied to the session it names: the agent's clock takes the close's timestamp and the
+// service is told once with those values (boundedLogAdapter.onMessage). A close whose cluster session id and timestamp
+// are read from each other's offsets leaves session 7 open and moves the clock to the session id instead.
+func TestBoundedLogAdapterAppliesALegalSessionClose(t *testing.T) {
+	service := &sessionRecorder{}
+	session := &containerClientSession{id: 7}
+	agent := &ClusteredServiceAgent{
+		service:     service,
+		sessions:    map[int64]ClientSession{7: session},
+		clusterTime: 1234,
+		logPosition: 99,
+	}
+	logs := captureErrorLogs(t)
+	adapter := newBoundedLogAdapter(NewOptions())
+	adapter.agent = agent
+	event := codecs.SessionCloseEvent{
+		LeadershipTermId: 1,
+		ClusterSessionId: 7,
+		Timestamp:        500,
+		CloseReason:      codecs.CloseReason.SERVICE_ACTION,
+	}
+	adapter.image = &scriptedImage{queue: []scriptedFragment{{
+		buf: encodedClusterMessage(t, &event), flags: testFlagUnfragmented,
+	}}}
+
+	assert.Equal(t, 1, adapter.poll(math.MaxInt64))
+	assert.NotContains(t, agent.sessions, int64(7), "the close removes the session it names")
+	assert.EqualValues(t, 500, agent.clusterTime, "the close sets the cluster time to its timestamp")
+	require.Len(t, service.closes, 1, "the service is told once")
+	assert.Same(t, session, service.closes[0].session)
+	assert.EqualValues(t, 500, service.closes[0].timestamp)
+	assert.Equal(t, codecs.CloseReason.SERVICE_ACTION, service.closes[0].reason)
+	assert.Zero(t, logs.FilterLevelExact(zapcore.ErrorLevel).Len(), "a legal close writes no Error line")
 }
 
 // The session message header (template 1) is read by hand. One row per field of SessionMessageHeader.RangeCheck.
