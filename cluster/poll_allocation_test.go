@@ -106,6 +106,28 @@ func TestBoundedLogAdapterPollAllocatesNothingWhenIdle(t *testing.T) {
 	assert.Equal(t, float64(0), allocs)
 }
 
+// A legal session message takes the manual decode path without allocating (boundedLogAdapter.onMessage). The measured
+// baseline before the range check was added is 0 allocations per message.
+func TestBoundedLogAdapterSessionMessageAllocatesNothing(t *testing.T) {
+	msg := encodedClusterMessage(t, &codecs.SessionMessageHeader{
+		LeadershipTermId: 1,
+		ClusterSessionId: 7,
+		Timestamp:        500,
+	})
+	header := fragmentHeader(testFlagUnfragmented)
+	agent := &ClusteredServiceAgent{
+		service:  &sessionRecorder{},
+		sessions: map[int64]ClientSession{7: &containerClientSession{id: 7}},
+	}
+	adapter := newBoundedLogAdapter(NewOptions())
+	adapter.agent = agent
+
+	allocs := testing.AllocsPerRun(1000, func() {
+		adapter.onMessage(msg, 0, msg.Capacity(), header)
+	})
+	assert.Equal(t, float64(0), allocs)
+}
+
 func TestBoundedLogAdapterDeliversEveryFragmentInOrder(t *testing.T) {
 	svc := &timerRecorder{}
 	adapter := newBoundedLogAdapter(&Options{LogFragmentLimit: 10})

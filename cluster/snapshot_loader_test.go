@@ -50,3 +50,33 @@ func TestSnapshotLoaderRejectsOutOfRangeSnapshotMarker(t *testing.T) {
 	assert.True(t, loader.isDone)
 	assert.False(t, loader.inSnapshot)
 }
+
+// A BEGIN marker whose type is not this service's stops the load: the client session after it is not read or added
+// (snapshotLoader.onFragment).
+func TestSnapshotLoaderStopsAtAWrongSnapshotType(t *testing.T) {
+	marker := codecs.SnapshotMarker{
+		TypeId:     snapshotTypeId + 1,
+		Mark:       codecs.SnapshotMark.BEGIN,
+		TimeUnit:   codecs.ClusterTimeUnit.MILLIS,
+		AppVersion: 1,
+	}
+	session := codecs.ClientSession{
+		ClusterSessionId: 7,
+		ResponseStreamId: 3,
+		ResponseChannel:  []byte("aeron:ipc"),
+	}
+	agent := &ClusteredServiceAgent{sessions: map[int64]ClientSession{}}
+	img := &scriptedImage{queue: []scriptedFragment{
+		{buf: encodedClusterMessage(t, &marker), flags: testFlagUnfragmented},
+		{buf: encodedClusterMessage(t, &session), flags: testFlagUnfragmented},
+	}}
+	loader := newSnapshotLoader(agent, img)
+
+	require.Equal(t, 1, loader.poll())
+	require.Error(t, loader.err)
+	assert.ErrorContains(t, loader.err, "unexpected snapshot type")
+	assert.True(t, loader.isDone, "a marker of another type ends the load")
+
+	require.NotPanics(t, func() { assert.Zero(t, loader.poll()) }, "the loader does not read past the marker")
+	assert.Empty(t, agent.sessions)
+}

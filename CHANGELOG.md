@@ -52,7 +52,11 @@ it was made and where it was found (trading-poc experiments under `docs/labs/aer
   polled from two goroutines raced on it (`-race`). The Archive default was `false`, so a control response outside its
   schema, such as an unknown `ControlResponse` code, was accepted; it is now an error for `ErrorListener`. A decode error
   ends the fragment: it is reported once, and the half-decoded value is not delivered to a listener and does not set a
-  result. Found in trading-poc cloud-perf 118.
+  result. The cluster log adapter range-checks its manually decoded timer event, session close event and session message
+  header through the generated structs it reuses, so a null id or timestamp or an unknown close reason ends the fragment
+  before the agent applies it, without copying the message or allocating per message. A snapshot marker whose type is not
+  this service's ends the snapshot load, so the sessions after it are not added to the agent. Found in trading-poc
+  cloud-perf 118.
 
 ### Added
 

@@ -34,6 +34,10 @@ type boundedLogAdapter struct {
 	image          aeron.Image
 	builder        *bytes.Buffer
 	maxLogPosition int64
+	// The manually decoded events reuse these structs for their range checks, so a message does not allocate.
+	timerEvent           codecs.TimerEvent
+	sessionCloseEvent    codecs.SessionCloseEvent
+	sessionMessageHeader codecs.SessionMessageHeader
 	// fragmentHandler is adapter.onFragment, bound once in newBoundedLogAdapter. Passing the method value to
 	// BoundedPoll on every round allocates a closure per round.
 	fragmentHandler term.FragmentHandler
@@ -107,9 +111,15 @@ func (adapter *boundedLogAdapter) onMessage(
 
 	switch templateId {
 	case timerEventTemplateId:
-		correlationId := buffer.GetInt64(offset + 8)
-		timestamp := buffer.GetInt64(offset + 16)
-		adapter.agent.onTimerEvent(header.Position(), correlationId, timestamp)
+		event := &adapter.timerEvent
+		event.LeadershipTermId = buffer.GetInt64(offset)
+		event.CorrelationId = buffer.GetInt64(offset + 8)
+		event.Timestamp = buffer.GetInt64(offset + 16)
+		if err := event.RangeCheck(version, event.SbeSchemaVersion()); err != nil {
+			logger.Errorf("boundedLogAdapter: timer event decode error: %v", err)
+			return
+		}
+		adapter.agent.onTimerEvent(header.Position(), event.CorrelationId, event.Timestamp)
 	case sessionOpenTemplateId:
 		event := &codecs.SessionOpenEvent{}
 		if err := event.Decode(
@@ -136,11 +146,22 @@ func (adapter *boundedLogAdapter) onMessage(
 			panic("boundedLogAdapter: session open error: " + err.Error())
 		}
 	case sessionCloseTemplateId:
-		leadershipTermId := buffer.GetInt64(offset)
-		clusterSessionId := buffer.GetInt64(offset + 8)
-		timestamp := buffer.GetInt64(offset + 16)
-		closeReason := codecs.CloseReasonEnum(buffer.GetInt32(offset + 24))
-		adapter.agent.onSessionClose(leadershipTermId, header.Position(), clusterSessionId, timestamp, closeReason)
+		event := &adapter.sessionCloseEvent
+		event.LeadershipTermId = buffer.GetInt64(offset)
+		event.ClusterSessionId = buffer.GetInt64(offset + 8)
+		event.Timestamp = buffer.GetInt64(offset + 16)
+		event.CloseReason = codecs.CloseReasonEnum(buffer.GetInt32(offset + 24))
+		if err := event.RangeCheck(version, event.SbeSchemaVersion()); err != nil {
+			logger.Errorf("boundedLogAdapter: session close decode error: %v", err)
+			return
+		}
+		adapter.agent.onSessionClose(
+			event.LeadershipTermId,
+			header.Position(),
+			event.ClusterSessionId,
+			event.Timestamp,
+			event.CloseReason,
+		)
 	case clusterActionReqTemplateId:
 		e := codecs.ClusterActionRequest{}
 		buf := toByteBuffer(buffer, offset, length)
@@ -171,12 +192,18 @@ func (adapter *boundedLogAdapter) onMessage(
 			logger.Errorf("received invalid session message - length: %d", length)
 			return
 		}
-		clusterSessionId := buffer.GetInt64(offset + 8)
-		timestamp := buffer.GetInt64(offset + 16)
+		event := &adapter.sessionMessageHeader
+		event.LeadershipTermId = buffer.GetInt64(offset)
+		event.ClusterSessionId = buffer.GetInt64(offset + 8)
+		event.Timestamp = buffer.GetInt64(offset + 16)
+		if err := event.RangeCheck(version, event.SbeSchemaVersion()); err != nil {
+			logger.Errorf("boundedLogAdapter: session message header decode error: %v", err)
+			return
+		}
 		adapter.agent.onSessionMessage(
 			header.Position(),
-			clusterSessionId,
-			timestamp,
+			event.ClusterSessionId,
+			event.Timestamp,
 			buffer,
 			offset+SessionMessageHeaderLength,
 			length-SessionMessageHeaderLength,
