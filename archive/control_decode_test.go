@@ -1,12 +1,15 @@
 package archive
 
 import (
+	"bytes"
+	"encoding/binary"
 	"math"
 	"testing"
 
 	"github.com/lirm/aeron-go/aeron/atomic"
 	"github.com/lirm/aeron-go/archive/codecs"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // The archive schema gives every id the range [MinInt64+1, MaxInt64]; MinInt64 is outside it. A response field outside
@@ -239,4 +242,60 @@ func TestErrorResponseStopsAfterHeaderDecodeError(t *testing.T) {
 
 	rec.requireOneError(t, "failed to decode control message header")
 	assert.NotContains(t, out, "Insert decoder", "the fragment ends after the header decode error")
+}
+
+// descriptorFromNewerVersion builds a RecordingDescriptor message whose header declares the given version and block
+// length. The fixed block of the codec is followed by extra bytes the codec does not know, then the variable-length
+// stripped channel, as a newer schema writes it.
+func descriptorFromNewerVersion(
+	t *testing.T,
+	desc *codecs.RecordingDescriptor,
+	version uint16,
+	blockLength uint16,
+	extra []byte,
+) *atomic.Buffer {
+	t.Helper()
+	var body bytes.Buffer
+	require.NoError(t, desc.Encode(codecs.NewSbeGoMarshaller(), &body, false))
+	fixed := int(desc.SbeBlockLength())
+	msg := make([]byte, 0, 8+body.Len()+len(extra))
+	var hdr [8]byte
+	binary.LittleEndian.PutUint16(hdr[0:], blockLength)
+	binary.LittleEndian.PutUint16(hdr[2:], desc.SbeTemplateId())
+	binary.LittleEndian.PutUint16(hdr[4:], desc.SbeSchemaId())
+	binary.LittleEndian.PutUint16(hdr[6:], version)
+	msg = append(msg, hdr[:]...)
+	msg = append(msg, body.Bytes()[:fixed]...)
+	msg = append(msg, extra...)
+	msg = append(msg, body.Bytes()[fixed:]...)
+	return atomic.MakeBuffer(msg)
+}
+
+// A RecordingDescriptor written by a newer schema has a longer block and a newer version. The codec skips the bytes
+// after the fields it knows (RecordingDescriptor.Decode: acting version above the schema and block above the known
+// block), so the stripped channel after them is read from the right place (DescriptorFragmentHandler). The header
+// fields are read in order, so the version and the block length must not be swapped.
+func TestDescriptorFragmentHandlerSkipsTheTrailingBlockOfANewerVersion(t *testing.T) {
+	control, rec := controlFragment(t)
+	control.archive.SessionID = 5
+	storeCorrelation(t, 42, control)
+	desc := &codecs.RecordingDescriptor{
+		ControlSessionId: 5,
+		CorrelationId:    42,
+		RecordingId:      9,
+		StrippedChannel:  []byte("aeron:udp"),
+	}
+	// The extra block is four bytes, and it reads as a stripped channel length of 1 if it is taken as the version. A
+	// swapped read would therefore decode the wrong channel and not a large allocation.
+	extra := []byte{0x01, 0x00, 0x00, 0x00}
+	msg := descriptorFromNewerVersion(t, desc, desc.SbeSchemaVersion()+1, desc.SbeBlockLength()+uint16(len(extra)), extra)
+
+	DescriptorFragmentHandler(&PollContext{control, 42}, msg, 0, msg.Capacity(), nil)
+
+	assert.Empty(t, rec.errs, "a newer descriptor with a longer block is not an error")
+	if assert.Len(t, control.Results.RecordingDescriptors, 1) {
+		got := control.Results.RecordingDescriptors[0]
+		assert.EqualValues(t, 9, got.RecordingId)
+		assert.Equal(t, "aeron:udp", string(got.StrippedChannel), "the extra block is skipped, not read as the channel")
+	}
 }
