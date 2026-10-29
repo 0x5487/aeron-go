@@ -1,6 +1,7 @@
 package cluster
 
 import (
+	"bytes"
 	"encoding/hex"
 	"fmt"
 	"math"
@@ -282,6 +283,24 @@ func TestBoundedLogAdapterStopsOnAnUndecodableEntry(t *testing.T) {
 			},
 		},
 		{
+			name:       "session close body shorter than its block",
+			templateId: sessionCloseTemplateId,
+			termId:     1,
+			cause:      "session close body is 8 bytes, shorter than 28",
+			message: func(*testing.T) *atomic.Buffer {
+				return clusterMessage(sessionCloseTemplateId, sessionCloseEventBlockLength, 0, []byte{1, 0, 0, 0, 0, 0, 0, 0})
+			},
+		},
+		{
+			name:       "session message body shorter than its header",
+			templateId: SessionMessageHeaderTemplateId,
+			termId:     1,
+			cause:      "session message body is 8 bytes, shorter than 24",
+			message: func(*testing.T) *atomic.Buffer {
+				return clusterMessage(SessionMessageHeaderTemplateId, SessionMessageHdrBlockLength, 0, []byte{1, 0, 0, 0, 0, 0, 0, 0})
+			},
+		},
+		{
 			name:       "unknown template",
 			templateId: 99,
 			termId:     NullValue,
@@ -326,6 +345,43 @@ func TestBoundedLogAdapterStopsOnAnUndecodableEntry(t *testing.T) {
 			assert.EqualValues(t, 99, agent.logPosition)
 			assert.Len(t, agent.sessions, 1, "the session table is untouched")
 			require.Len(t, img.queue, 1, "the next fragment in the same poll is not read")
+		})
+	}
+}
+
+// fragmentWithTrailer builds a cluster SBE message as clusterMessage does and returns it with the length of the
+// fragment. The buffer holds 16 more bytes after the fragment, so a read past the fragment finds bytes that are not
+// NullValue and fails an assertion; without them the read would abort the process on the buffer bounds.
+func fragmentWithTrailer(templateId, blockLength uint16, body []byte) (*atomic.Buffer, int32) {
+	msg := clusterMessage(templateId, blockLength, 0, body)
+	raw := msg.GetBytesArray(0, msg.Capacity())
+	length := int32(len(raw))
+	raw = append(raw, bytes.Repeat([]byte{0x7f}, 16)...)
+	return atomic.MakeBuffer(raw), length
+}
+
+// A body too short to hold the leadership term id reports NullValue as the term of its Error line
+// (leadershipTermIdFrom). The adapter is given the real fragment length, so the only read past the body is the one the
+// guard must prevent.
+func TestBoundedLogAdapterReportsNullTermForAShortBody(t *testing.T) {
+	cases := []struct {
+		name string
+		body []byte
+	}{
+		{name: "header only", body: nil},
+		{name: "four byte body", body: []byte{1, 0, 0, 0}},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			logs := captureErrorLogs(t)
+			adapter := newBoundedLogAdapter(NewOptions())
+			msg, length := fragmentWithTrailer(timerEventTemplateId, timerEventBlockLength, tt.body)
+
+			stopOf(t, func() { adapter.onMessage(msg, 0, length, fragmentHeader(testFlagUnfragmented)) })
+
+			fields := requireUndecodableEntryLine(t, logs)
+			assert.Equal(t, uint16(timerEventTemplateId), fields.templateId)
+			assert.EqualValues(t, NullValue, fields.leadershipTermId, "a body too short for the term has no term")
 		})
 	}
 }

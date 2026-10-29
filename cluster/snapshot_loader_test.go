@@ -5,6 +5,7 @@ import (
 	"math"
 	"testing"
 
+	"github.com/lirm/aeron-go/aeron/atomic"
 	"github.com/lirm/aeron-go/cluster/codecs"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -192,4 +193,89 @@ func TestLoadSnapshotImageReturnsALoaderError(t *testing.T) {
 	assert.Empty(t, agent.sessions)
 	require.Len(t, img.queue, 1, "the fragment after the marker is not read")
 	assert.Zero(t, logs.FilterLevelExact(zapcore.ErrorLevel).Len(), "a semantic loader error is not a decode stop")
+}
+
+// A snapshot fragment the loader cannot decode ends the load with the entry's fields and reads no further fragment
+// (snapshotLoader.undecodable). No BEGIN marker came before these entries, so their term is NullValue.
+func TestSnapshotLoaderRecordsAnUndecodableFragment(t *testing.T) {
+	cases := []struct {
+		name       string
+		templateId uint16
+		cause      string
+		message    func(t *testing.T) *atomic.Buffer
+	}{
+		{
+			name:       "fragment shorter than the SBE header",
+			templateId: 0,
+			cause:      "shorter than the SBE header",
+			message: func(*testing.T) *atomic.Buffer {
+				return atomic.MakeBuffer([]byte{0x01, 0x02, 0x03})
+			},
+		},
+		{
+			name:       "schema id is not the cluster schema",
+			templateId: snapshotMarkerTemplateId,
+			cause:      "unexpected schemaId",
+			message: func(t *testing.T) *atomic.Buffer {
+				msg := encodedClusterMessage(t, &codecs.SnapshotMarker{
+					TypeId:      snapshotTypeId,
+					LogPosition: 1,
+					Mark:        codecs.SnapshotMark.BEGIN,
+					TimeUnit:    codecs.ClusterTimeUnit.MILLIS,
+					AppVersion:  1,
+				})
+				msg.PutUInt16(4, ClusterSchemaId+1)
+				return msg
+			},
+		},
+		{
+			name:       "unknown template",
+			templateId: 99,
+			cause:      "unexpected templateId=99",
+			message: func(*testing.T) *atomic.Buffer {
+				return clusterMessage(99, 0, 0, nil)
+			},
+		},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			msg := tt.message(t)
+			session := codecs.ClientSession{ClusterSessionId: 7, ResponseStreamId: 3, ResponseChannel: []byte("aeron:ipc")}
+			agent := &ClusteredServiceAgent{sessions: map[int64]ClientSession{}}
+			img := &scriptedImage{queue: []scriptedFragment{
+				{buf: msg, flags: testFlagUnfragmented},
+				{buf: encodedClusterMessage(t, &session), flags: testFlagUnfragmented},
+			}}
+			loader := newSnapshotLoader(agent, img)
+
+			require.Equal(t, 1, loader.poll(), "the bad fragment is read")
+			require.True(t, loader.isDone, "an undecodable fragment ends the load")
+			var entry *undecodableLogEntry
+			require.ErrorAs(t, loader.err, &entry)
+			assert.Equal(t, tt.templateId, entry.templateId)
+			assert.EqualValues(t, NullValue, entry.leadershipTermId)
+			assert.ErrorContains(t, entry.cause, tt.cause)
+			assert.Equal(t, hexOf(msg), hex.EncodeToString(entry.payload))
+			assert.Zero(t, loader.poll(), "the loader reads no fragment after the bad one")
+			require.Len(t, img.queue, 1, "the next fragment is not read")
+			assert.Empty(t, agent.sessions)
+		})
+	}
+}
+
+// A snapshot marker whose body is too short to hold the term reads no term (snapshotLoader.onFragment). The marker is
+// undecodable and its Error line reports NullValue, the term the loader had before the marker. The fragment is given
+// its real length inside a buffer with bytes after it, so a read past the body finds non-null bytes.
+func TestSnapshotLoaderReadsNoTermFromAShortMarker(t *testing.T) {
+	msg, length := fragmentWithTrailer(snapshotMarkerTemplateId, uint16((&codecs.SnapshotMarker{}).SbeBlockLength()),
+		[]byte{1, 0, 0, 0, 0, 0, 0, 0})
+	loader := newSnapshotLoader(&ClusteredServiceAgent{}, nil)
+
+	loader.fragmentHandler(msg, 0, length, fragmentHeader(testFlagUnfragmented))
+
+	require.True(t, loader.isDone)
+	var entry *undecodableLogEntry
+	require.ErrorAs(t, loader.err, &entry)
+	assert.Equal(t, uint16(snapshotMarkerTemplateId), entry.templateId)
+	assert.EqualValues(t, NullValue, entry.leadershipTermId, "the short marker's term is not read")
 }

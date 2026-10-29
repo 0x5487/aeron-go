@@ -7,6 +7,8 @@ import (
 	"github.com/lirm/aeron-go/aeron/atomic"
 	"github.com/lirm/aeron-go/cluster/codecs"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"go.uber.org/zap/zapcore"
 )
 
 // Every way a service control message can fail to decode stops the service: the agent is not given the join, and the
@@ -78,4 +80,46 @@ func TestServiceAdapterStopsOnAnUndecodableMessage(t *testing.T) {
 			assert.Zero(t, agent.logAdapter.maxLogPosition)
 		})
 	}
+}
+
+// An unknown template is not a join-log decode failure: the service adapter skips it without an Error line and reads
+// on to the next message (serviceAdapter.onFragment, default case).
+func TestServiceAdapterSkipsAnUnknownTemplate(t *testing.T) {
+	logs := captureErrorLogs(t)
+	agent := &ClusteredServiceAgent{terminationPosition: NullPosition}
+	adapter := newServiceAdapter(nil)
+	adapter.agent = agent
+	unknown := clusterMessage(99, 0, 0, nil)
+	termination := clusterMessage(serviceTerminationPosTemplateId, 8, 0, []byte{77, 0, 0, 0, 0, 0, 0, 0})
+
+	require.NotPanics(t, func() {
+		adapter.fragmentHandler(unknown, 0, unknown.Capacity(), fragmentHeader(testFlagUnfragmented))
+	}, "the unknown template does not stop the service")
+	assert.Zero(t, logs.FilterLevelExact(zapcore.ErrorLevel).Len(), "the skip writes no Error line")
+	assert.EqualValues(t, NullPosition, agent.terminationPosition, "the unknown template is not applied")
+
+	adapter.fragmentHandler(termination, 0, termination.Capacity(), fragmentHeader(testFlagUnfragmented))
+	assert.EqualValues(t, 77, agent.terminationPosition, "the message after the unknown template is read")
+	assert.Zero(t, logs.FilterLevelExact(zapcore.ErrorLevel).Len())
+}
+
+// Without a session message header buffer the agent has no term of its own, so an entry that carries none is reported
+// with NullValue (ClusteredServiceAgent.leadershipTermId).
+func TestServiceAdapterReportsNullTermWithoutASessionHeader(t *testing.T) {
+	logs := captureErrorLogs(t)
+	agent := &ClusteredServiceAgent{logAdapter: newBoundedLogAdapter(NewOptions())}
+	adapter := newServiceAdapter(nil)
+	adapter.agent = agent
+	msg := encodedClusterMessage(t, &codecs.JoinLog{
+		LogPosition:    math.MinInt64,
+		MaxLogPosition: 1,
+		IsStartup:      codecs.BooleanType.TRUE,
+		LogChannel:     []byte("aeron:ipc"),
+	})
+
+	stopOf(t, func() {
+		adapter.fragmentHandler(msg, 0, msg.Capacity(), fragmentHeader(testFlagUnfragmented))
+	})
+
+	requireUndecodableEntry(t, logs, msg, joinLogTemplateId, NullValue)
 }
