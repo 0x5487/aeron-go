@@ -16,11 +16,10 @@ const (
 
 // Proxy class for encapsulating encoding and sending of control protocol messages to a cluster
 type consensusModuleProxy struct {
-	marshaller    *codecs.SbeGoMarshaller // currently shared as we're not reentrant (but could be here)
-	idleStrategy  idlestrategy.Idler
-	rangeChecking bool
-	publication   *aeron.Publication
-	buffer        *atomic.Buffer
+	marshaller   *codecs.SbeGoMarshaller // currently shared as we're not reentrant (but could be here)
+	idleStrategy idlestrategy.Idler
+	publication  *aeron.Publication
+	buffer       *atomic.Buffer
 }
 
 func newConsensusModuleProxy(
@@ -28,10 +27,9 @@ func newConsensusModuleProxy(
 	publication *aeron.Publication,
 ) *consensusModuleProxy {
 	return &consensusModuleProxy{
-		marshaller:    codecs.NewSbeGoMarshaller(),
-		rangeChecking: options.RangeChecking,
-		publication:   publication,
-		buffer:        atomic.MakeBuffer(make([]byte, 500)),
+		marshaller:  codecs.NewSbeGoMarshaller(),
+		publication: publication,
+		buffer:      atomic.MakeBuffer(make([]byte, 500)),
 	}
 }
 
@@ -49,7 +47,6 @@ func (proxy *consensusModuleProxy) serviceAckRequest(
 	// Create a packet and send it
 	bytes, err := codecs.ServiceAckRequestPacket(
 		proxy.marshaller,
-		proxy.rangeChecking,
 		logPosition,
 		timestamp,
 		ackID,
@@ -68,7 +65,6 @@ func (proxy *consensusModuleProxy) closeSessionRequest(
 	// Create a packet and send it
 	bytes, err := codecs.CloseSessionRequestPacket(
 		proxy.marshaller,
-		proxy.rangeChecking,
 		clusterSessionId,
 	)
 	if err != nil {

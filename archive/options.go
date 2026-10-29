@@ -39,7 +39,6 @@ type Options struct {
 	AeronLoglevel          zapcore.Level      // [runtime] via logging.SetLevel()
 	Timeout                time.Duration      // [runtime] How long to try sending/receiving control messages
 	IdleStrategy           idlestrategy.Idler // [runtime] Idlestrategy for sending/receiving control messages
-	RangeChecking          bool               // [runtime] archive protocol marshalling checks
 	AuthEnabled            bool               // [init] enable to require AuthConnect() over Connect()
 	AuthCredentials        []uint8            // [init] The credentials to be provided to AuthConnect()
 	AuthChallenge          []uint8            // [init] The challenge string we are to expect (checked iff not nil)
@@ -62,7 +61,6 @@ var defaultOptions = Options{
 	AeronLoglevel:          zapcore.WarnLevel,
 	Timeout:                time.Second * 5,
 	IdleStrategy:           idlestrategy.Sleeping{SleepFor: DefaultPollInterval},
-	RangeChecking:          false,
 	AuthEnabled:            false,
 	AuthCredentials:        nil,
 	AuthChallenge:          nil,

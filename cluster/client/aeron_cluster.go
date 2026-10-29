@@ -444,7 +444,7 @@ func (ac *AeronCluster) sendConnectRequest(responseChannel string) error {
 	if err := header.Encode(marshaller, writer); err != nil {
 		return err
 	}
-	if err := req.Encode(marshaller, writer, true); err != nil {
+	if err := req.Encode(marshaller, writer, rangeCheck); err != nil {
 		return err
 	}
 	buffer := atomic.MakeBuffer(writer.Bytes())
@@ -495,7 +495,7 @@ func (ac *AeronCluster) onFragment(buffer *atomic.Buffer, offset, length int32, 
 		e := codecs.Challenge{}
 		buf := bytes.Buffer{}
 		buffer.WriteBytes(&buf, offset, length)
-		if err := e.Decode(marshaller, &buf, version, blockLength, true); err != nil {
+		if err := e.Decode(marshaller, &buf, version, blockLength, rangeCheck); err != nil {
 			logger.Errorf("new leader event decode error: %v", err)
 		} else {
 			logger.Warningf("received challenge, corrId=%d clusterSessionId=%d", e.CorrelationId, e.ClusterSessionId)
@@ -507,7 +507,7 @@ func (ac *AeronCluster) onNewLeaderEvent(buffer *atomic.Buffer, offset, length i
 	e := codecs.NewLeaderEvent{}
 	buf := bytes.Buffer{}
 	buffer.WriteBytes(&buf, offset, length)
-	if err := e.Decode(marshaller, &buf, version, blockLength, true); err != nil {
+	if err := e.Decode(marshaller, &buf, version, blockLength, rangeCheck); err != nil {
 		logger.Errorf("new leader event decode error: %v", err)
 	} else if ac.hasSession() && e.ClusterSessionId == ac.clusterSessionId {
 		ac.leadershipTermId = e.LeadershipTermId
@@ -532,7 +532,7 @@ func (ac *AeronCluster) onSessionEvent(buffer *atomic.Buffer, offset, length int
 	e := codecs.SessionEvent{}
 	buf := bytes.Buffer{}
 	buffer.WriteBytes(&buf, offset, length)
-	if err := e.Decode(marshaller, &buf, version, blockLength, true); err != nil {
+	if err := e.Decode(marshaller, &buf, version, blockLength, rangeCheck); err != nil {
 		logger.Errorf("session event decode error: %v", err)
 	} else if ac.state == clientAwaitConnectReply && e.CorrelationId == ac.correlationId {
 		switch e.Code {

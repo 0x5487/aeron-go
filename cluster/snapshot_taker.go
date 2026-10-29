@@ -55,7 +55,6 @@ func (st *snapshotTaker) markSnapshot(
 ) error {
 	bytes, err := codecs.SnapshotMarkerPacket(
 		st.marshaller,
-		st.options.RangeChecking,
 		snapshotTypeId,
 		logPosition,
 		leadershipTermId,
@@ -74,7 +73,7 @@ func (st *snapshotTaker) markSnapshot(
 }
 
 func (st *snapshotTaker) snapshotSession(session ClientSession) error {
-	bytes, err := codecs.ClientSessionPacket(st.marshaller, st.options.RangeChecking,
+	bytes, err := codecs.ClientSessionPacket(st.marshaller,
 		session.Id(), session.ResponseStreamId(), []byte(session.ResponseChannel()), session.EncodedPrincipal())
 	if err != nil {
 		return err

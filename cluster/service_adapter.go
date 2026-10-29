@@ -61,7 +61,7 @@ func (adapter *serviceAdapter) onFragment(
 		buf := &bytes.Buffer{}
 		buffer.WriteBytes(buf, offset, length)
 		joinLog := &codecs.JoinLog{}
-		if err := joinLog.Decode(adapter.marshaller, buf, version, blockLength, true); err != nil {
+		if err := joinLog.Decode(adapter.marshaller, buf, version, blockLength, rangeCheck); err != nil {
 			logger.Errorf("serviceAdapter: join log decode error: %v", err)
 		} else {
 			adapter.agent.onJoinLog(

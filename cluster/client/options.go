@@ -5,8 +5,11 @@ import (
 	"go.uber.org/zap/zapcore"
 )
 
+// rangeCheck is passed to every generated Encode and Decode in this package. The cluster protocol is always range
+// checked, so a value outside its schema range is an error.
+const rangeCheck = true
+
 type Options struct {
-	RangeChecking      bool
 	Loglevel           zapcore.Level // [runtime] via logging.SetLevel()
 	IngressEndpoints   string
 	IngressChannel     string
@@ -19,7 +22,6 @@ type Options struct {
 
 func NewOptions() *Options {
 	return &Options{
-		RangeChecking:   true,
 		Loglevel:        zapcore.WarnLevel,
 		IngressStreamId: 101,
 		EgressChannel:   "aeron:udp?alias=cluster-egress|endpoint=localhost:0",

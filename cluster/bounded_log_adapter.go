@@ -117,7 +117,7 @@ func (adapter *boundedLogAdapter) onMessage(
 			toByteBuffer(buffer, offset, length),
 			version,
 			blockLength,
-			adapter.options.RangeChecking,
+			rangeCheck,
 		); err != nil {
 			logger.Errorf("boundedLogAdapter: session open decode error: %v", err)
 			return
@@ -144,7 +144,7 @@ func (adapter *boundedLogAdapter) onMessage(
 	case clusterActionReqTemplateId:
 		e := codecs.ClusterActionRequest{}
 		buf := toByteBuffer(buffer, offset, length)
-		if err := e.Decode(adapter.marshaller, buf, version, blockLength, adapter.options.RangeChecking); err != nil {
+		if err := e.Decode(adapter.marshaller, buf, version, blockLength, rangeCheck); err != nil {
 			logger.Errorf("boundedLogAdapter: cluster action request decode error: %v", err)
 		} else {
 			adapter.agent.onServiceAction(e.LeadershipTermId, e.LogPosition, e.Timestamp, e.Action)
@@ -152,7 +152,7 @@ func (adapter *boundedLogAdapter) onMessage(
 	case newLeadershipTermTemplateId:
 		e := codecs.NewLeadershipTermEvent{}
 		buf := toByteBuffer(buffer, offset, length)
-		if err := e.Decode(adapter.marshaller, buf, version, blockLength, adapter.options.RangeChecking); err != nil {
+		if err := e.Decode(adapter.marshaller, buf, version, blockLength, rangeCheck); err != nil {
 			logger.Errorf("boundedLogAdapter: new leadership term decode error: %v", err)
 		} else {
 			adapter.agent.onNewLeadershipTermEvent(e.LeadershipTermId, e.LogPosition, e.Timestamp,
@@ -161,7 +161,7 @@ func (adapter *boundedLogAdapter) onMessage(
 	case membershipChangeTemplateId:
 		e := codecs.MembershipChangeEvent{}
 		buf := toByteBuffer(buffer, offset, length)
-		if err := e.Decode(adapter.marshaller, buf, version, blockLength, adapter.options.RangeChecking); err != nil {
+		if err := e.Decode(adapter.marshaller, buf, version, blockLength, rangeCheck); err != nil {
 			logger.Errorf("boundedLogAdapter: membership change event decode error: %v", err)
 		} else {
 			adapter.agent.onMembershipChange(e.LogPosition, e.Timestamp, e.ChangeType, e.MemberId)

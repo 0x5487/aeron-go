@@ -77,7 +77,7 @@ func (loader *snapshotLoader) onFragment(
 	switch templateId {
 	case snapshotMarkerTemplateId:
 		marker := &codecs.SnapshotMarker{}
-		if err := marker.Decode(loader.marshaller, buf, version, blockLength, true); err != nil {
+		if err := marker.Decode(loader.marshaller, buf, version, blockLength, rangeCheck); err != nil {
 			loader.err = err
 			loader.isDone = true
 		} else if marker.TypeId != snapshotTypeId {
@@ -105,7 +105,7 @@ func (loader *snapshotLoader) onFragment(
 		}
 	case clientSessionTemplateId:
 		s := codecs.ClientSession{}
-		if err := s.Decode(loader.marshaller, buf, version, blockLength, true); err != nil {
+		if err := s.Decode(loader.marshaller, buf, version, blockLength, rangeCheck); err != nil {
 			loader.err = err
 			loader.isDone = true
 		} else {

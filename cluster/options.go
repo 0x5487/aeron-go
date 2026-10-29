@@ -8,10 +8,13 @@ import (
 	"go.uber.org/zap/zapcore"
 )
 
+// rangeCheck is passed to every generated Encode and Decode in this package. The cluster protocol is always range
+// checked, so a value outside its schema range is an error.
+const rangeCheck = true
+
 type Options struct {
 	Timeout                 time.Duration      // [runtime] How long to try sending/receiving control messages
 	IdleStrategy            idlestrategy.Idler // [runtime] Idlestrategy for sending/receiving control messagesA
-	RangeChecking           bool               // [runtime] archive protocol marshalling checks
 	Loglevel                zapcore.Level      // [runtime] via logging.SetLevel()
 	ClusterDir              string
 	ClusterId               int32
@@ -35,7 +38,6 @@ func NewOptions() *Options {
 	return &Options{
 		Timeout:                 time.Second * 5,
 		IdleStrategy:            idlestrategy.NewDefaultBackoffIdleStrategy(),
-		RangeChecking:           true,
 		Loglevel:                zapcore.WarnLevel,
 		ClusterDir:              "/tmp/aeron-cluster",
 		ControlChannel:          "aeron:ipc?term-length=128k|alias=service-control",

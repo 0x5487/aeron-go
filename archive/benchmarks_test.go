@@ -65,7 +65,7 @@ func BenchmarkDescriptorFragmentHandler(b *testing.B) {
 		b.Logf("header encode failed")
 		b.FailNow()
 	}
-	if err := rd.Encode(marshaller, buffer, rangeChecking); err != nil {
+	if err := rd.Encode(marshaller, buffer, rangeCheck); err != nil {
 		b.Logf("header encode failed")
 		b.FailNow()
 	}

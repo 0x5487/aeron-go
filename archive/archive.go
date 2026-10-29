@@ -137,13 +137,9 @@ func LoggingUnavailableImageListener(image aeron.Image) {
 	logger.Infof("NewUnavalableImageListener, sessionId is %d", image.SessionID())
 }
 
-// Also set globally (and set via the Options) is the protocol
-// marshalling checks. When unmarshalling we lack context so we need a
-// global copy of the options values which we set before calling
-// Poll() to ensure it's current
-//
-// Use the Options structure to set this
-var rangeChecking bool
+// rangeCheck is passed to every generated Encode and Decode in this package. The archive protocol is always
+// range checked: a value outside its schema range is an error, never handed to the caller.
+const rangeCheck = true
 
 // Logging handler
 var logger = logging.MustGetLogger("archive")

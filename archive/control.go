@@ -180,7 +180,7 @@ func controlFragmentHandler(context interface{}, buffer *atomic.Buffer, offset i
 	case codecIds.controlResponse:
 		var controlResponse = new(codecs.ControlResponse)
 		logger.Debugf("controlFragmentHandler/controlResponse: Received controlResponse: length %d", buf.Len())
-		if err := controlResponse.Decode(marshaller, buf, hdr.Version, hdr.BlockLength, rangeChecking); err != nil {
+		if err := controlResponse.Decode(marshaller, buf, hdr.Version, hdr.BlockLength, rangeCheck); err != nil {
 			// Not much to be done here as we can't see what's gone wrong
 			err2 := fmt.Errorf("controlFragmentHandler failed to decode control response:%w", err)
 			// Call the global error handler, ugly but it's all we've got
@@ -206,7 +206,7 @@ func controlFragmentHandler(context interface{}, buffer *atomic.Buffer, offset i
 	case codecIds.recordingSignalEvent:
 		var recordingSignalEvent = new(codecs.RecordingSignalEvent)
 
-		if err := recordingSignalEvent.Decode(marshaller, buf, hdr.Version, hdr.BlockLength, rangeChecking); err != nil {
+		if err := recordingSignalEvent.Decode(marshaller, buf, hdr.Version, hdr.BlockLength, rangeCheck); err != nil {
 			// Not much to be done here as we can't really tell what went wrong
 			err2 := fmt.Errorf("ControlFragmentHandler failed to decode recording signal: %w", err)
 			if pollContext.control.archive.Listeners.ErrorListener != nil {
@@ -257,7 +257,7 @@ func ConnectionControlFragmentHandler(context *PollContext, buffer *atomic.Buffe
 	case codecIds.controlResponse:
 		var controlResponse = new(codecs.ControlResponse)
 		logger.Debugf("Received controlResponse: length %d", buf.Len())
-		if err := controlResponse.Decode(marshaller, buf, hdr.Version, hdr.BlockLength, rangeChecking); err != nil {
+		if err := controlResponse.Decode(marshaller, buf, hdr.Version, hdr.BlockLength, rangeCheck); err != nil {
 			// Not much to be done here as we can't correlate
 			err2 := fmt.Errorf("ConnectionControlFragmentHandler failed to decode control response: %w", err)
 			if context.control.archive.Listeners.ErrorListener != nil {
@@ -309,7 +309,7 @@ func ConnectionControlFragmentHandler(context *PollContext, buffer *atomic.Buffe
 	case codecIds.challenge:
 		var challenge = new(codecs.Challenge)
 
-		if err := challenge.Decode(marshaller, buf, hdr.Version, hdr.BlockLength, rangeChecking); err != nil {
+		if err := challenge.Decode(marshaller, buf, hdr.Version, hdr.BlockLength, rangeCheck); err != nil {
 			// Not much to be done here as we can't correlate
 			err2 := fmt.Errorf("ControlFragmentHandler failed to decode challenge: %w", err)
 			if context.control.archive.Listeners.ErrorListener != nil {
@@ -442,7 +442,7 @@ func (control *Control) errorResponseFragmentHandler(buffer *atomic.Buffer, offs
 	case codecIds.controlResponse:
 		var controlResponse = new(codecs.ControlResponse)
 		logger.Debugf("controlFragmentHandler/controlResponse: Received controlResponse")
-		if err := controlResponse.Decode(marshaller, buf, hdr.Version, hdr.BlockLength, rangeChecking); err != nil {
+		if err := controlResponse.Decode(marshaller, buf, hdr.Version, hdr.BlockLength, rangeCheck); err != nil {
 			// Not much to be done here as we can't see what's gone wrong
 			err2 := fmt.Errorf("errorResponseFragmentHandler failed to decode control response:%w", err)
 			// Call the global error handler, ugly, but it's all we've got
@@ -464,7 +464,7 @@ func (control *Control) errorResponseFragmentHandler(buffer *atomic.Buffer, offs
 	case codecIds.challenge:
 		var challenge = new(codecs.Challenge)
 
-		if err := challenge.Decode(marshaller, buf, hdr.Version, hdr.BlockLength, rangeChecking); err != nil {
+		if err := challenge.Decode(marshaller, buf, hdr.Version, hdr.BlockLength, rangeCheck); err != nil {
 			// Not much to be done here as we can't correlate
 			err2 := fmt.Errorf("errorResponseFragmentHandler failed to decode challenge: %w", err)
 			if pollContext.control.archive.Listeners.ErrorListener != nil {
@@ -482,7 +482,7 @@ func (control *Control) errorResponseFragmentHandler(buffer *atomic.Buffer, offs
 	case codecIds.recordingDescriptor:
 		var rd = new(codecs.RecordingDescriptor)
 
-		if err := rd.Decode(marshaller, buf, hdr.Version, hdr.BlockLength, rangeChecking); err != nil {
+		if err := rd.Decode(marshaller, buf, hdr.Version, hdr.BlockLength, rangeCheck); err != nil {
 			// Not much to be done here as we can't correlate
 			err2 := fmt.Errorf("errorResponseFragmentHandler failed to decode recordingSubscription: %w", err)
 			if pollContext.control.archive.Listeners.ErrorListener != nil {
@@ -500,7 +500,7 @@ func (control *Control) errorResponseFragmentHandler(buffer *atomic.Buffer, offs
 	case codecIds.recordingSubscriptionDescriptor:
 		var rsd = new(codecs.RecordingSubscriptionDescriptor)
 
-		if err := rsd.Decode(marshaller, buf, hdr.Version, hdr.BlockLength, rangeChecking); err != nil {
+		if err := rsd.Decode(marshaller, buf, hdr.Version, hdr.BlockLength, rangeCheck); err != nil {
 			// Not much to be done here as we can't correlate
 			err2 := fmt.Errorf("errorResponseFragmentHandler failed to decode recordingSubscription: %w", err)
 			if pollContext.control.archive.Listeners.ErrorListener != nil {
@@ -517,7 +517,7 @@ func (control *Control) errorResponseFragmentHandler(buffer *atomic.Buffer, offs
 	case codecIds.recordingSignalEvent:
 		var rse = new(codecs.RecordingSignalEvent)
 
-		if err := rse.Decode(marshaller, buf, hdr.Version, hdr.BlockLength, rangeChecking); err != nil {
+		if err := rse.Decode(marshaller, buf, hdr.Version, hdr.BlockLength, rangeCheck); err != nil {
 			// Not much to be done here as we can't really tell what went wrong
 			err2 := fmt.Errorf("errorResponseFragmentHandler failed to decode recording signal: %w", err)
 			if pollContext.control.archive.Listeners.ErrorListener != nil {
@@ -546,9 +546,6 @@ func (control *Control) errorResponseFragmentHandler(buffer *atomic.Buffer, offs
 // back data from the underlying subscription
 func (control *Control) poll(handler term.ControlledFragmentHandler, fragmentLimit int) int {
 
-	// Update our globals in case they've changed so we use the current state in our callback
-	rangeChecking = control.archive.Options.RangeChecking
-
 	control.Results.ControlResponse = nil  // Clear old results
 	control.Results.IsPollComplete = false // Clear completion flag
 
@@ -559,8 +556,6 @@ func (control *Control) poll(handler term.ControlledFragmentHandler, fragmentLim
 // Zero if no events are available.
 func (control *Control) Poll() (workCount int) {
 	if control.Results.IsPollComplete {
-		// Update our globals in case they've changed so we use the current state in our callback
-		rangeChecking = control.archive.Options.RangeChecking
 		control.Results = ControlResults{}
 	}
 
@@ -597,7 +592,7 @@ func (control *Control) onFragment(
 	case codecIds.controlResponse:
 		var controlResponse = new(codecs.ControlResponse)
 		logger.Debugf("Received controlResponse: length %d", buf.Len())
-		if err := controlResponse.Decode(marshaller, buf, hdr.Version, hdr.BlockLength, rangeChecking); err != nil {
+		if err := controlResponse.Decode(marshaller, buf, hdr.Version, hdr.BlockLength, rangeCheck); err != nil {
 			// Not much to be done here as we can't correlate
 			err = fmt.Errorf("failed to decode control response: %w", err)
 			if control.archive.Listeners.ErrorListener != nil {
@@ -612,7 +607,7 @@ func (control *Control) onFragment(
 
 	case codecIds.recordingSignalEvent:
 		var recordingSignalEvent = new(codecs.RecordingSignalEvent)
-		if err := recordingSignalEvent.Decode(marshaller, buf, hdr.Version, hdr.BlockLength, rangeChecking); err != nil {
+		if err := recordingSignalEvent.Decode(marshaller, buf, hdr.Version, hdr.BlockLength, rangeCheck); err != nil {
 			// Not much to be done here as we can't correlate
 			err = fmt.Errorf("failed to decode recording signal: %w", err)
 			if control.archive.Listeners.ErrorListener != nil {
@@ -732,7 +727,7 @@ func DescriptorFragmentHandler(context interface{}, buffer *atomic.Buffer, offse
 	case codecIds.recordingDescriptor:
 		var recordingDescriptor = new(codecs.RecordingDescriptor)
 		logger.Debugf("Received RecordingDescriptor: length %d", buf.Len())
-		if err := recordingDescriptor.Decode(marshaller, buf, hdr.Version, hdr.BlockLength, rangeChecking); err != nil {
+		if err := recordingDescriptor.Decode(marshaller, buf, hdr.Version, hdr.BlockLength, rangeCheck); err != nil {
 			// Not much to be done here as we can't correlate
 			err2 := fmt.Errorf("failed to decode RecordingDescriptor: %w", err)
 			if pollContext.control.archive.Listeners.ErrorListener != nil {
@@ -754,7 +749,7 @@ func DescriptorFragmentHandler(context interface{}, buffer *atomic.Buffer, offse
 	case codecIds.recordingSubscriptionDescriptor:
 		logger.Debugf("Received RecordingSubscriptionDescriptor: length %d", buf.Len())
 		var recordingSubscriptionDescriptor = new(codecs.RecordingSubscriptionDescriptor)
-		if err := recordingSubscriptionDescriptor.Decode(marshaller, buf, hdr.Version, hdr.BlockLength, rangeChecking); err != nil {
+		if err := recordingSubscriptionDescriptor.Decode(marshaller, buf, hdr.Version, hdr.BlockLength, rangeCheck); err != nil {
 			// Not much to be done here as we can't correlate
 			err2 := fmt.Errorf("failed to decode RecordingSubscriptioDescriptor: %w", err)
 			if pollContext.control.archive.Listeners.ErrorListener != nil {
@@ -775,7 +770,7 @@ func DescriptorFragmentHandler(context interface{}, buffer *atomic.Buffer, offse
 	case codecIds.controlResponse:
 		var controlResponse = new(codecs.ControlResponse)
 		logger.Debugf("Received controlResponse: length %d", buf.Len())
-		if err := controlResponse.Decode(marshaller, buf, hdr.Version, hdr.BlockLength, rangeChecking); err != nil {
+		if err := controlResponse.Decode(marshaller, buf, hdr.Version, hdr.BlockLength, rangeCheck); err != nil {
 			// Not much to be done here as we can't correlate
 			err2 := fmt.Errorf("failed to decode control response: %w", err)
 			if pollContext.control.archive.Listeners.ErrorListener != nil {
@@ -807,7 +802,7 @@ func DescriptorFragmentHandler(context interface{}, buffer *atomic.Buffer, offse
 
 	case codecIds.recordingSignalEvent:
 		var recordingSignalEvent = new(codecs.RecordingSignalEvent)
-		if err := recordingSignalEvent.Decode(marshaller, buf, hdr.Version, hdr.BlockLength, rangeChecking); err != nil {
+		if err := recordingSignalEvent.Decode(marshaller, buf, hdr.Version, hdr.BlockLength, rangeCheck); err != nil {
 			// Not much to be done here as we can't correlate
 			err2 := fmt.Errorf("failed to decode recording signal: %w", err)
 			if pollContext.control.archive.Listeners.ErrorListener != nil {
@@ -827,9 +822,6 @@ func DescriptorFragmentHandler(context interface{}, buffer *atomic.Buffer, offse
 
 // PollForDescriptors to poll for recording descriptors, adding them to the set in the control
 func (control *Control) PollForDescriptors(correlationID int64, sessionID int64, fragmentsWanted int32) error {
-
-	// Update our globals in case they've changed so we use the current state in our callback
-	rangeChecking = control.archive.Options.RangeChecking
 
 	control.Results.ControlResponse = nil                  // Clear old results
 	control.Results.IsPollComplete = false                 // Clear completion flag

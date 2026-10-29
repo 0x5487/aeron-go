@@ -46,6 +46,13 @@ it was made and where it was found (trading-poc experiments under `docs/labs/aer
   changed (its id and registration id together), so a caller never mixes two counters. Found in trading-poc
   `docs/tickets/cloud-perf/issues/108-bridge-active-only-when-caught-up.md`.
 
+- **archive, cluster**: the range check of decoded protocol messages is always on, and the `RangeChecking` option is
+  deleted from `archive.Options`, `cluster.Options` and `cluster/client.Options` (cloud-perf 118). The Archive client kept
+  the option in a package-level variable that every `Poll` wrote and every fragment handler read, so two Archive clients
+  polled from two goroutines raced on it (`-race`). The Archive default was `false`, so a control response outside its
+  schema, such as an unknown `ControlResponse` code, was accepted; it is now an error for `ErrorListener`. Found in
+  trading-poc cloud-perf 118.
+
 ### Added
 
 - **aeron**: `FindPublication`, `FindSubscription` and `FindCounter` return `*RegistrationError` (`RegistrationID`,

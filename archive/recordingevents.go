@@ -49,9 +49,6 @@ func (rea *RecordingEventsAdapter) PollWithContext(handler FragmentHandlerWithLi
 		rea.prealloc()
 	}
 
-	// Update our globals in case they've changed so we use the current state in our callback
-	rangeChecking = rea.archive.Options.RangeChecking
-
 	if handler != nil {
 		rea.handlerWithListeners = handler
 	} else {
@@ -98,7 +95,7 @@ func (rea *RecordingEventsAdapter) reFragmentHandler(listeners *ArchiveListeners
 	case codecIds.recordingStarted:
 		var recordingStarted = new(codecs.RecordingStarted)
 		logger.Debugf("Received RecordingStarted: length %d", buf.Len())
-		if err := recordingStarted.Decode(marshaller, buf, hdr.Version, hdr.BlockLength, rangeChecking); err != nil {
+		if err := recordingStarted.Decode(marshaller, buf, hdr.Version, hdr.BlockLength, rangeCheck); err != nil {
 			err2 := fmt.Errorf("Decode() of RecordingStarted failed: %w", err)
 			if listeners.ErrorListener != nil {
 				listeners.ErrorListener(err2)
@@ -114,7 +111,7 @@ func (rea *RecordingEventsAdapter) reFragmentHandler(listeners *ArchiveListeners
 	case codecIds.recordingProgress:
 		var recordingProgress = new(codecs.RecordingProgress)
 		logger.Debugf("Received RecordingProgress: length %d", buf.Len())
-		if err := recordingProgress.Decode(marshaller, buf, hdr.Version, hdr.BlockLength, rangeChecking); err != nil {
+		if err := recordingProgress.Decode(marshaller, buf, hdr.Version, hdr.BlockLength, rangeCheck); err != nil {
 			err2 := fmt.Errorf("Decode() of RecordingProgress failed: %w", err)
 			if listeners.ErrorListener != nil {
 				listeners.ErrorListener(err2)
@@ -130,7 +127,7 @@ func (rea *RecordingEventsAdapter) reFragmentHandler(listeners *ArchiveListeners
 	case codecIds.recordingStopped:
 		var recordingStopped = new(codecs.RecordingStopped)
 		logger.Debugf("Received RecordingStopped: length %d", buf.Len())
-		if err := recordingStopped.Decode(marshaller, buf, hdr.Version, hdr.BlockLength, rangeChecking); err != nil {
+		if err := recordingStopped.Decode(marshaller, buf, hdr.Version, hdr.BlockLength, rangeCheck); err != nil {
 			err2 := fmt.Errorf("Decode() of RecordingStopped failed: %w", err)
 			if listeners.ErrorListener != nil {
 				listeners.ErrorListener(err2)

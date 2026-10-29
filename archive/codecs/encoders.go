@@ -19,6 +19,10 @@ import (
 	"bytes"
 )
 
+// rangeCheck is passed to every generated Encode in this package: the archive protocol is always range
+// checked, so a value outside its schema range is an error.
+const rangeCheck = true
+
 // Encoders for all the protocol packets
 //
 // Each of these functions creates a []byte suitable for sending over
@@ -31,7 +35,7 @@ import (
 //
 // The codecs are generated from that specification using Simple
 // Binary Encoding (SBE) from https://github.com/real-logic/simple-binary-encoding
-func ConnectRequestPacket(marshaller *SbeGoMarshaller, rangeChecking bool, correlationID int64, responseStream int32, responseChannel string) ([]byte, error) {
+func ConnectRequestPacket(marshaller *SbeGoMarshaller, correlationID int64, responseStream int32, responseChannel string) ([]byte, error) {
 	var request ConnectRequest
 
 	request.CorrelationId = correlationID
@@ -45,14 +49,14 @@ func ConnectRequestPacket(marshaller *SbeGoMarshaller, rangeChecking bool, corre
 	if err := header.Encode(marshaller, buffer); err != nil {
 		return nil, err
 	}
-	if err := request.Encode(marshaller, buffer, rangeChecking); err != nil {
+	if err := request.Encode(marshaller, buffer, rangeCheck); err != nil {
 		return nil, err
 	}
 
 	return buffer.Bytes(), nil
 }
 
-func CloseSessionRequestPacket(marshaller *SbeGoMarshaller, rangeChecking bool, controlSessionId int64) ([]byte, error) {
+func CloseSessionRequestPacket(marshaller *SbeGoMarshaller, controlSessionId int64) ([]byte, error) {
 	var request CloseSessionRequest
 
 	request.ControlSessionId = controlSessionId
@@ -63,7 +67,7 @@ func CloseSessionRequestPacket(marshaller *SbeGoMarshaller, rangeChecking bool, 
 	if err := header.Encode(marshaller, buffer); err != nil {
 		return nil, err
 	}
-	if err := request.Encode(marshaller, buffer, rangeChecking); err != nil {
+	if err := request.Encode(marshaller, buffer, rangeCheck); err != nil {
 		return nil, err
 	}
 
@@ -71,11 +75,11 @@ func CloseSessionRequestPacket(marshaller *SbeGoMarshaller, rangeChecking bool, 
 }
 
 // deprecated
-func StartRecordingRequestPacket(marshaller *SbeGoMarshaller, rangeChecking bool, controlSessionId int64, correlationId int64, stream int32, isLocal bool, channel string) ([]byte, error) {
-	return StartRecordingRequest2Packet(marshaller, rangeChecking, controlSessionId, correlationId, stream, isLocal, false, channel)
+func StartRecordingRequestPacket(marshaller *SbeGoMarshaller, controlSessionId int64, correlationId int64, stream int32, isLocal bool, channel string) ([]byte, error) {
+	return StartRecordingRequest2Packet(marshaller, controlSessionId, correlationId, stream, isLocal, false, channel)
 }
 
-func StartRecordingRequest2Packet(marshaller *SbeGoMarshaller, rangeChecking bool, controlSessionId int64, correlationId int64, stream int32, isLocal bool, autoStop bool, channel string) ([]byte, error) {
+func StartRecordingRequest2Packet(marshaller *SbeGoMarshaller, controlSessionId int64, correlationId int64, stream int32, isLocal bool, autoStop bool, channel string) ([]byte, error) {
 	var request StartRecordingRequest2
 
 	request.Channel = []uint8(channel)
@@ -97,14 +101,14 @@ func StartRecordingRequest2Packet(marshaller *SbeGoMarshaller, rangeChecking boo
 	if err := header.Encode(marshaller, buffer); err != nil {
 		return nil, err
 	}
-	if err := request.Encode(marshaller, buffer, rangeChecking); err != nil {
+	if err := request.Encode(marshaller, buffer, rangeCheck); err != nil {
 		return nil, err
 	}
 
 	return buffer.Bytes(), nil
 }
 
-func StopRecordingRequestPacket(marshaller *SbeGoMarshaller, rangeChecking bool, controlSessionId int64, correlationId int64, stream int32, channel string) ([]byte, error) {
+func StopRecordingRequestPacket(marshaller *SbeGoMarshaller, controlSessionId int64, correlationId int64, stream int32, channel string) ([]byte, error) {
 	var request StopRecordingRequest
 
 	request.ControlSessionId = controlSessionId
@@ -118,14 +122,14 @@ func StopRecordingRequestPacket(marshaller *SbeGoMarshaller, rangeChecking bool,
 	if err := header.Encode(marshaller, buffer); err != nil {
 		return nil, err
 	}
-	if err := request.Encode(marshaller, buffer, rangeChecking); err != nil {
+	if err := request.Encode(marshaller, buffer, rangeCheck); err != nil {
 		return nil, err
 	}
 
 	return buffer.Bytes(), nil
 }
 
-func ReplayRequestPacket(marshaller *SbeGoMarshaller, rangeChecking bool, controlSessionId int64, correlationId int64, recordingId int64, position int64, length int64, replayStream int32, replayChannel string) ([]byte, error) {
+func ReplayRequestPacket(marshaller *SbeGoMarshaller, controlSessionId int64, correlationId int64, recordingId int64, position int64, length int64, replayStream int32, replayChannel string) ([]byte, error) {
 	var request ReplayRequest
 	request.ControlSessionId = controlSessionId
 	request.CorrelationId = correlationId
@@ -141,14 +145,14 @@ func ReplayRequestPacket(marshaller *SbeGoMarshaller, rangeChecking bool, contro
 	if err := header.Encode(marshaller, buffer); err != nil {
 		return nil, err
 	}
-	if err := request.Encode(marshaller, buffer, rangeChecking); err != nil {
+	if err := request.Encode(marshaller, buffer, rangeCheck); err != nil {
 		return nil, err
 	}
 
 	return buffer.Bytes(), nil
 }
 
-func StopReplayRequestPacket(marshaller *SbeGoMarshaller, rangeChecking bool, controlSessionId int64, correlationId int64, replaySessionId int64) ([]byte, error) {
+func StopReplayRequestPacket(marshaller *SbeGoMarshaller, controlSessionId int64, correlationId int64, replaySessionId int64) ([]byte, error) {
 	var request StopReplayRequest
 	request.ControlSessionId = controlSessionId
 	request.CorrelationId = correlationId
@@ -160,14 +164,14 @@ func StopReplayRequestPacket(marshaller *SbeGoMarshaller, rangeChecking bool, co
 	if err := header.Encode(marshaller, buffer); err != nil {
 		return nil, err
 	}
-	if err := request.Encode(marshaller, buffer, rangeChecking); err != nil {
+	if err := request.Encode(marshaller, buffer, rangeCheck); err != nil {
 		return nil, err
 	}
 
 	return buffer.Bytes(), nil
 }
 
-func ListRecordingsRequestPacket(marshaller *SbeGoMarshaller, rangeChecking bool, controlSessionId int64, correlationId int64, fromRecordingId int64, recordCount int32) ([]byte, error) {
+func ListRecordingsRequestPacket(marshaller *SbeGoMarshaller, controlSessionId int64, correlationId int64, fromRecordingId int64, recordCount int32) ([]byte, error) {
 	var request ListRecordingsRequest
 	request.ControlSessionId = controlSessionId
 	request.CorrelationId = correlationId
@@ -180,14 +184,14 @@ func ListRecordingsRequestPacket(marshaller *SbeGoMarshaller, rangeChecking bool
 	if err := header.Encode(marshaller, buffer); err != nil {
 		return nil, err
 	}
-	if err := request.Encode(marshaller, buffer, rangeChecking); err != nil {
+	if err := request.Encode(marshaller, buffer, rangeCheck); err != nil {
 		return nil, err
 	}
 
 	return buffer.Bytes(), nil
 }
 
-func ListRecordingsForUriRequestPacket(marshaller *SbeGoMarshaller, rangeChecking bool, controlSessionId int64, correlationId int64, fromRecordingId int64, recordCount int32, stream int32, channel string) ([]byte, error) {
+func ListRecordingsForUriRequestPacket(marshaller *SbeGoMarshaller, controlSessionId int64, correlationId int64, fromRecordingId int64, recordCount int32, stream int32, channel string) ([]byte, error) {
 	var request ListRecordingsForUriRequest
 	request.ControlSessionId = controlSessionId
 	request.CorrelationId = correlationId
@@ -202,14 +206,14 @@ func ListRecordingsForUriRequestPacket(marshaller *SbeGoMarshaller, rangeCheckin
 	if err := header.Encode(marshaller, buffer); err != nil {
 		return nil, err
 	}
-	if err := request.Encode(marshaller, buffer, rangeChecking); err != nil {
+	if err := request.Encode(marshaller, buffer, rangeCheck); err != nil {
 		return nil, err
 	}
 
 	return buffer.Bytes(), nil
 }
 
-func ListRecordingRequestPacket(marshaller *SbeGoMarshaller, rangeChecking bool, controlSessionId int64, correlationId int64, recordingId int64) ([]byte, error) {
+func ListRecordingRequestPacket(marshaller *SbeGoMarshaller, controlSessionId int64, correlationId int64, recordingId int64) ([]byte, error) {
 	var request ListRecordingRequest
 	request.ControlSessionId = controlSessionId
 	request.CorrelationId = correlationId
@@ -221,7 +225,7 @@ func ListRecordingRequestPacket(marshaller *SbeGoMarshaller, rangeChecking bool,
 	if err := header.Encode(marshaller, buffer); err != nil {
 		return nil, err
 	}
-	if err := request.Encode(marshaller, buffer, rangeChecking); err != nil {
+	if err := request.Encode(marshaller, buffer, rangeCheck); err != nil {
 		return nil, err
 	}
 
@@ -229,11 +233,11 @@ func ListRecordingRequestPacket(marshaller *SbeGoMarshaller, rangeChecking bool,
 }
 
 // deprecated
-func ExtendRecordingRequestPacket(marshaller *SbeGoMarshaller, rangeChecking bool, controlSessionId int64, correlationId int64, recordingId int64, stream int32, sourceLocation SourceLocationEnum, channel string) ([]byte, error) {
-	return ExtendRecordingRequest2Packet(marshaller, rangeChecking, controlSessionId, correlationId, recordingId, stream, sourceLocation, false, channel)
+func ExtendRecordingRequestPacket(marshaller *SbeGoMarshaller, controlSessionId int64, correlationId int64, recordingId int64, stream int32, sourceLocation SourceLocationEnum, channel string) ([]byte, error) {
+	return ExtendRecordingRequest2Packet(marshaller, controlSessionId, correlationId, recordingId, stream, sourceLocation, false, channel)
 }
 
-func ExtendRecordingRequest2Packet(marshaller *SbeGoMarshaller, rangeChecking bool, controlSessionId int64, correlationId int64, recordingId int64, stream int32, sourceLocation SourceLocationEnum, autoStop bool, channel string) ([]byte, error) {
+func ExtendRecordingRequest2Packet(marshaller *SbeGoMarshaller, controlSessionId int64, correlationId int64, recordingId int64, stream int32, sourceLocation SourceLocationEnum, autoStop bool, channel string) ([]byte, error) {
 	var request ExtendRecordingRequest2
 	request.ControlSessionId = controlSessionId
 	request.CorrelationId = correlationId
@@ -251,14 +255,14 @@ func ExtendRecordingRequest2Packet(marshaller *SbeGoMarshaller, rangeChecking bo
 	if err := header.Encode(marshaller, buffer); err != nil {
 		return nil, err
 	}
-	if err := request.Encode(marshaller, buffer, rangeChecking); err != nil {
+	if err := request.Encode(marshaller, buffer, rangeCheck); err != nil {
 		return nil, err
 	}
 
 	return buffer.Bytes(), nil
 }
 
-func RecordingPositionRequestPacket(marshaller *SbeGoMarshaller, rangeChecking bool, controlSessionId int64, correlationId int64, recordingId int64) ([]byte, error) {
+func RecordingPositionRequestPacket(marshaller *SbeGoMarshaller, controlSessionId int64, correlationId int64, recordingId int64) ([]byte, error) {
 	var request RecordingPositionRequest
 	request.ControlSessionId = controlSessionId
 	request.CorrelationId = correlationId
@@ -270,14 +274,14 @@ func RecordingPositionRequestPacket(marshaller *SbeGoMarshaller, rangeChecking b
 	if err := header.Encode(marshaller, buffer); err != nil {
 		return nil, err
 	}
-	if err := request.Encode(marshaller, buffer, rangeChecking); err != nil {
+	if err := request.Encode(marshaller, buffer, rangeCheck); err != nil {
 		return nil, err
 	}
 
 	return buffer.Bytes(), nil
 }
 
-func TruncateRecordingRequestPacket(marshaller *SbeGoMarshaller, rangeChecking bool, controlSessionId int64, correlationId int64, recordingId int64, position int64) ([]byte, error) {
+func TruncateRecordingRequestPacket(marshaller *SbeGoMarshaller, controlSessionId int64, correlationId int64, recordingId int64, position int64) ([]byte, error) {
 	var request TruncateRecordingRequest
 	request.ControlSessionId = controlSessionId
 	request.CorrelationId = correlationId
@@ -290,14 +294,14 @@ func TruncateRecordingRequestPacket(marshaller *SbeGoMarshaller, rangeChecking b
 	if err := header.Encode(marshaller, buffer); err != nil {
 		return nil, err
 	}
-	if err := request.Encode(marshaller, buffer, rangeChecking); err != nil {
+	if err := request.Encode(marshaller, buffer, rangeCheck); err != nil {
 		return nil, err
 	}
 
 	return buffer.Bytes(), nil
 }
 
-func StopRecordingSubscriptionPacket(marshaller *SbeGoMarshaller, rangeChecking bool, controlSessionId int64, correlationId int64, subscriptionId int64) ([]byte, error) {
+func StopRecordingSubscriptionPacket(marshaller *SbeGoMarshaller, controlSessionId int64, correlationId int64, subscriptionId int64) ([]byte, error) {
 	var request StopRecordingSubscriptionRequest
 	request.ControlSessionId = controlSessionId
 	request.CorrelationId = correlationId
@@ -309,14 +313,14 @@ func StopRecordingSubscriptionPacket(marshaller *SbeGoMarshaller, rangeChecking 
 	if err := header.Encode(marshaller, buffer); err != nil {
 		return nil, err
 	}
-	if err := request.Encode(marshaller, buffer, rangeChecking); err != nil {
+	if err := request.Encode(marshaller, buffer, rangeCheck); err != nil {
 		return nil, err
 	}
 
 	return buffer.Bytes(), nil
 }
 
-func StopRecordingByIdentityPacket(marshaller *SbeGoMarshaller, rangeChecking bool, controlSessionId int64, correlationId int64, recordingId int64) ([]byte, error) {
+func StopRecordingByIdentityPacket(marshaller *SbeGoMarshaller, controlSessionId int64, correlationId int64, recordingId int64) ([]byte, error) {
 	var request StopRecordingByIdentityRequest
 	request.ControlSessionId = controlSessionId
 	request.CorrelationId = correlationId
@@ -328,14 +332,14 @@ func StopRecordingByIdentityPacket(marshaller *SbeGoMarshaller, rangeChecking bo
 	if err := header.Encode(marshaller, buffer); err != nil {
 		return nil, err
 	}
-	if err := request.Encode(marshaller, buffer, rangeChecking); err != nil {
+	if err := request.Encode(marshaller, buffer, rangeCheck); err != nil {
 		return nil, err
 	}
 
 	return buffer.Bytes(), nil
 }
 
-func StopPositionPacket(marshaller *SbeGoMarshaller, rangeChecking bool, controlSessionId int64, correlationId int64, recordingId int64) ([]byte, error) {
+func StopPositionPacket(marshaller *SbeGoMarshaller, controlSessionId int64, correlationId int64, recordingId int64) ([]byte, error) {
 	var request StopPositionRequest
 	request.ControlSessionId = controlSessionId
 	request.CorrelationId = correlationId
@@ -347,14 +351,14 @@ func StopPositionPacket(marshaller *SbeGoMarshaller, rangeChecking bool, control
 	if err := header.Encode(marshaller, buffer); err != nil {
 		return nil, err
 	}
-	if err := request.Encode(marshaller, buffer, rangeChecking); err != nil {
+	if err := request.Encode(marshaller, buffer, rangeCheck); err != nil {
 		return nil, err
 	}
 
 	return buffer.Bytes(), nil
 }
 
-func FindLastMatchingRecordingPacket(marshaller *SbeGoMarshaller, rangeChecking bool, controlSessionId int64, correlationId int64, minRecordingId int64, sessionId int32, stream int32, channel string) ([]byte, error) {
+func FindLastMatchingRecordingPacket(marshaller *SbeGoMarshaller, controlSessionId int64, correlationId int64, minRecordingId int64, sessionId int32, stream int32, channel string) ([]byte, error) {
 	var request FindLastMatchingRecordingRequest
 	request.ControlSessionId = controlSessionId
 	request.CorrelationId = correlationId
@@ -369,14 +373,14 @@ func FindLastMatchingRecordingPacket(marshaller *SbeGoMarshaller, rangeChecking 
 	if err := header.Encode(marshaller, buffer); err != nil {
 		return nil, err
 	}
-	if err := request.Encode(marshaller, buffer, rangeChecking); err != nil {
+	if err := request.Encode(marshaller, buffer, rangeCheck); err != nil {
 		return nil, err
 	}
 
 	return buffer.Bytes(), nil
 }
 
-func ListRecordingSubscriptionsPacket(marshaller *SbeGoMarshaller, rangeChecking bool, controlSessionId int64, correlationId int64, pseudoIndex int32, subscriptionCount int32, applyStreamId bool, stream int32, channel string) ([]byte, error) {
+func ListRecordingSubscriptionsPacket(marshaller *SbeGoMarshaller, controlSessionId int64, correlationId int64, pseudoIndex int32, subscriptionCount int32, applyStreamId bool, stream int32, channel string) ([]byte, error) {
 	var request ListRecordingSubscriptionsRequest
 	request.ControlSessionId = controlSessionId
 	request.CorrelationId = correlationId
@@ -394,14 +398,14 @@ func ListRecordingSubscriptionsPacket(marshaller *SbeGoMarshaller, rangeChecking
 	if err := header.Encode(marshaller, buffer); err != nil {
 		return nil, err
 	}
-	if err := request.Encode(marshaller, buffer, rangeChecking); err != nil {
+	if err := request.Encode(marshaller, buffer, rangeCheck); err != nil {
 		return nil, err
 	}
 
 	return buffer.Bytes(), nil
 }
 
-func BoundedReplayPacket(marshaller *SbeGoMarshaller, rangeChecking bool, controlSessionId int64, correlationId int64, recordingId int64, position int64, length int64, limitCounterId int32, replayStream int32, replayChannel string) ([]byte, error) {
+func BoundedReplayPacket(marshaller *SbeGoMarshaller, controlSessionId int64, correlationId int64, recordingId int64, position int64, length int64, limitCounterId int32, replayStream int32, replayChannel string) ([]byte, error) {
 	var request BoundedReplayRequest
 	request.ControlSessionId = controlSessionId
 	request.CorrelationId = correlationId
@@ -418,14 +422,14 @@ func BoundedReplayPacket(marshaller *SbeGoMarshaller, rangeChecking bool, contro
 	if err := header.Encode(marshaller, buffer); err != nil {
 		return nil, err
 	}
-	if err := request.Encode(marshaller, buffer, rangeChecking); err != nil {
+	if err := request.Encode(marshaller, buffer, rangeCheck); err != nil {
 		return nil, err
 	}
 
 	return buffer.Bytes(), nil
 }
 
-func StopAllReplaysPacket(marshaller *SbeGoMarshaller, rangeChecking bool, controlSessionId int64, correlationId int64, recordingId int64) ([]byte, error) {
+func StopAllReplaysPacket(marshaller *SbeGoMarshaller, controlSessionId int64, correlationId int64, recordingId int64) ([]byte, error) {
 	var request StopAllReplaysRequest
 	request.ControlSessionId = controlSessionId
 	request.CorrelationId = correlationId
@@ -437,14 +441,14 @@ func StopAllReplaysPacket(marshaller *SbeGoMarshaller, rangeChecking bool, contr
 	if err := header.Encode(marshaller, buffer); err != nil {
 		return nil, err
 	}
-	if err := request.Encode(marshaller, buffer, rangeChecking); err != nil {
+	if err := request.Encode(marshaller, buffer, rangeCheck); err != nil {
 		return nil, err
 	}
 
 	return buffer.Bytes(), nil
 }
 
-func CatalogHeaderPacket(marshaller *SbeGoMarshaller, rangeChecking bool, version int32, length int32, nextRecordingId int64, alignment int32) ([]byte, error) {
+func CatalogHeaderPacket(marshaller *SbeGoMarshaller, version int32, length int32, nextRecordingId int64, alignment int32) ([]byte, error) {
 	var request CatalogHeader
 	request.Version = version
 	request.Length = length
@@ -457,14 +461,14 @@ func CatalogHeaderPacket(marshaller *SbeGoMarshaller, rangeChecking bool, versio
 	if err := header.Encode(marshaller, buffer); err != nil {
 		return nil, err
 	}
-	if err := request.Encode(marshaller, buffer, rangeChecking); err != nil {
+	if err := request.Encode(marshaller, buffer, rangeCheck); err != nil {
 		return nil, err
 	}
 
 	return buffer.Bytes(), nil
 }
 
-func ReplicateRequestPacket(marshaller *SbeGoMarshaller, rangeChecking bool, controlSessionId int64, correlationId int64, srcRecordingId int64, dstRecordingId int64, srcControlStreamId int32, srcControlChannel string, liveDestination string) ([]byte, error) {
+func ReplicateRequestPacket(marshaller *SbeGoMarshaller, controlSessionId int64, correlationId int64, srcRecordingId int64, dstRecordingId int64, srcControlStreamId int32, srcControlChannel string, liveDestination string) ([]byte, error) {
 	var request ReplicateRequest
 	request.ControlSessionId = controlSessionId
 	request.CorrelationId = correlationId
@@ -480,14 +484,14 @@ func ReplicateRequestPacket(marshaller *SbeGoMarshaller, rangeChecking bool, con
 	if err := header.Encode(marshaller, buffer); err != nil {
 		return nil, err
 	}
-	if err := request.Encode(marshaller, buffer, rangeChecking); err != nil {
+	if err := request.Encode(marshaller, buffer, rangeCheck); err != nil {
 		return nil, err
 	}
 
 	return buffer.Bytes(), nil
 }
 
-func StopReplicationRequestPacket(marshaller *SbeGoMarshaller, rangeChecking bool, controlSessionId int64, correlationId int64, replicationId int64) ([]byte, error) {
+func StopReplicationRequestPacket(marshaller *SbeGoMarshaller, controlSessionId int64, correlationId int64, replicationId int64) ([]byte, error) {
 	var request StopReplicationRequest
 	request.ControlSessionId = controlSessionId
 	request.CorrelationId = correlationId
@@ -499,14 +503,14 @@ func StopReplicationRequestPacket(marshaller *SbeGoMarshaller, rangeChecking boo
 	if err := header.Encode(marshaller, buffer); err != nil {
 		return nil, err
 	}
-	if err := request.Encode(marshaller, buffer, rangeChecking); err != nil {
+	if err := request.Encode(marshaller, buffer, rangeCheck); err != nil {
 		return nil, err
 	}
 
 	return buffer.Bytes(), nil
 }
 
-func StartPositionRequestPacket(marshaller *SbeGoMarshaller, rangeChecking bool, controlSessionId int64, correlationId int64, recordingId int64) ([]byte, error) {
+func StartPositionRequestPacket(marshaller *SbeGoMarshaller, controlSessionId int64, correlationId int64, recordingId int64) ([]byte, error) {
 	var request StartPositionRequest
 	request.ControlSessionId = controlSessionId
 	request.CorrelationId = correlationId
@@ -518,14 +522,14 @@ func StartPositionRequestPacket(marshaller *SbeGoMarshaller, rangeChecking bool,
 	if err := header.Encode(marshaller, buffer); err != nil {
 		return nil, err
 	}
-	if err := request.Encode(marshaller, buffer, rangeChecking); err != nil {
+	if err := request.Encode(marshaller, buffer, rangeCheck); err != nil {
 		return nil, err
 	}
 
 	return buffer.Bytes(), nil
 }
 
-func DetachSegmentsRequestPacket(marshaller *SbeGoMarshaller, rangeChecking bool, controlSessionId int64, correlationId int64, recordingId int64, newStartPosition int64) ([]byte, error) {
+func DetachSegmentsRequestPacket(marshaller *SbeGoMarshaller, controlSessionId int64, correlationId int64, recordingId int64, newStartPosition int64) ([]byte, error) {
 	var request DetachSegmentsRequest
 	request.ControlSessionId = controlSessionId
 	request.CorrelationId = correlationId
@@ -538,14 +542,14 @@ func DetachSegmentsRequestPacket(marshaller *SbeGoMarshaller, rangeChecking bool
 	if err := header.Encode(marshaller, buffer); err != nil {
 		return nil, err
 	}
-	if err := request.Encode(marshaller, buffer, rangeChecking); err != nil {
+	if err := request.Encode(marshaller, buffer, rangeCheck); err != nil {
 		return nil, err
 	}
 
 	return buffer.Bytes(), nil
 }
 
-func DeleteDetachedSegmentsRequestPacket(marshaller *SbeGoMarshaller, rangeChecking bool, controlSessionId int64, correlationId int64, recordingId int64) ([]byte, error) {
+func DeleteDetachedSegmentsRequestPacket(marshaller *SbeGoMarshaller, controlSessionId int64, correlationId int64, recordingId int64) ([]byte, error) {
 	var request DeleteDetachedSegmentsRequest
 	request.ControlSessionId = controlSessionId
 	request.CorrelationId = correlationId
@@ -557,14 +561,14 @@ func DeleteDetachedSegmentsRequestPacket(marshaller *SbeGoMarshaller, rangeCheck
 	if err := header.Encode(marshaller, buffer); err != nil {
 		return nil, err
 	}
-	if err := request.Encode(marshaller, buffer, rangeChecking); err != nil {
+	if err := request.Encode(marshaller, buffer, rangeCheck); err != nil {
 		return nil, err
 	}
 
 	return buffer.Bytes(), nil
 }
 
-func PurgeSegmentsRequestPacket(marshaller *SbeGoMarshaller, rangeChecking bool, controlSessionId int64, correlationId int64, recordingId int64, newStartPosition int64) ([]byte, error) {
+func PurgeSegmentsRequestPacket(marshaller *SbeGoMarshaller, controlSessionId int64, correlationId int64, recordingId int64, newStartPosition int64) ([]byte, error) {
 	var request PurgeSegmentsRequest
 	request.ControlSessionId = controlSessionId
 	request.CorrelationId = correlationId
@@ -577,14 +581,14 @@ func PurgeSegmentsRequestPacket(marshaller *SbeGoMarshaller, rangeChecking bool,
 	if err := header.Encode(marshaller, buffer); err != nil {
 		return nil, err
 	}
-	if err := request.Encode(marshaller, buffer, rangeChecking); err != nil {
+	if err := request.Encode(marshaller, buffer, rangeCheck); err != nil {
 		return nil, err
 	}
 
 	return buffer.Bytes(), nil
 }
 
-func AttachSegmentsRequestPacket(marshaller *SbeGoMarshaller, rangeChecking bool, controlSessionId int64, correlationId int64, recordingId int64) ([]byte, error) {
+func AttachSegmentsRequestPacket(marshaller *SbeGoMarshaller, controlSessionId int64, correlationId int64, recordingId int64) ([]byte, error) {
 	var request AttachSegmentsRequest
 	request.ControlSessionId = controlSessionId
 	request.CorrelationId = correlationId
@@ -596,14 +600,14 @@ func AttachSegmentsRequestPacket(marshaller *SbeGoMarshaller, rangeChecking bool
 	if err := header.Encode(marshaller, buffer); err != nil {
 		return nil, err
 	}
-	if err := request.Encode(marshaller, buffer, rangeChecking); err != nil {
+	if err := request.Encode(marshaller, buffer, rangeCheck); err != nil {
 		return nil, err
 	}
 
 	return buffer.Bytes(), nil
 }
 
-func AuthConnectRequestPacket(marshaller *SbeGoMarshaller, rangeChecking bool, correlationID int64, responseStream int32, responseChannel string, encodedCredentials []uint8) ([]byte, error) {
+func AuthConnectRequestPacket(marshaller *SbeGoMarshaller, correlationID int64, responseStream int32, responseChannel string, encodedCredentials []uint8) ([]byte, error) {
 	var request AuthConnectRequest
 
 	request.CorrelationId = correlationID
@@ -618,14 +622,14 @@ func AuthConnectRequestPacket(marshaller *SbeGoMarshaller, rangeChecking bool, c
 	if err := header.Encode(marshaller, buffer); err != nil {
 		return nil, err
 	}
-	if err := request.Encode(marshaller, buffer, rangeChecking); err != nil {
+	if err := request.Encode(marshaller, buffer, rangeCheck); err != nil {
 		return nil, err
 	}
 
 	return buffer.Bytes(), nil
 }
 
-func ChallengeResponsePacket(marshaller *SbeGoMarshaller, rangeChecking bool, controlSessionId int64, correlationId int64, encodedCredentials []uint8) ([]byte, error) {
+func ChallengeResponsePacket(marshaller *SbeGoMarshaller, controlSessionId int64, correlationId int64, encodedCredentials []uint8) ([]byte, error) {
 	var request ChallengeResponse
 	request.ControlSessionId = controlSessionId
 	request.CorrelationId = correlationId
@@ -637,14 +641,14 @@ func ChallengeResponsePacket(marshaller *SbeGoMarshaller, rangeChecking bool, co
 	if err := header.Encode(marshaller, buffer); err != nil {
 		return nil, err
 	}
-	if err := request.Encode(marshaller, buffer, rangeChecking); err != nil {
+	if err := request.Encode(marshaller, buffer, rangeCheck); err != nil {
 		return nil, err
 	}
 
 	return buffer.Bytes(), nil
 }
 
-func MigrateSegmentsRequestPacket(marshaller *SbeGoMarshaller, rangeChecking bool, controlSessionId int64, correlationId int64, srcRecordingId int64, destRecordingId int64) ([]byte, error) {
+func MigrateSegmentsRequestPacket(marshaller *SbeGoMarshaller, controlSessionId int64, correlationId int64, srcRecordingId int64, destRecordingId int64) ([]byte, error) {
 	var request MigrateSegmentsRequest
 	request.ControlSessionId = controlSessionId
 	request.CorrelationId = correlationId
@@ -657,14 +661,14 @@ func MigrateSegmentsRequestPacket(marshaller *SbeGoMarshaller, rangeChecking boo
 	if err := header.Encode(marshaller, buffer); err != nil {
 		return nil, err
 	}
-	if err := request.Encode(marshaller, buffer, rangeChecking); err != nil {
+	if err := request.Encode(marshaller, buffer, rangeCheck); err != nil {
 		return nil, err
 	}
 
 	return buffer.Bytes(), nil
 }
 
-func KeepAliveRequestPacket(marshaller *SbeGoMarshaller, rangeChecking bool, controlSessionId int64, correlationId int64) ([]byte, error) {
+func KeepAliveRequestPacket(marshaller *SbeGoMarshaller, controlSessionId int64, correlationId int64) ([]byte, error) {
 	var request KeepAliveRequest
 	request.ControlSessionId = controlSessionId
 	request.CorrelationId = correlationId
@@ -675,14 +679,14 @@ func KeepAliveRequestPacket(marshaller *SbeGoMarshaller, rangeChecking bool, con
 	if err := header.Encode(marshaller, buffer); err != nil {
 		return nil, err
 	}
-	if err := request.Encode(marshaller, buffer, rangeChecking); err != nil {
+	if err := request.Encode(marshaller, buffer, rangeCheck); err != nil {
 		return nil, err
 	}
 
 	return buffer.Bytes(), nil
 }
 
-func TaggedReplicateRequestPacket(marshaller *SbeGoMarshaller, rangeChecking bool, controlSessionId int64, correlationId int64, srcRecordingId int64, dstRecordingId int64, channelTagId int64, subscriptionTagId int64, srcControlStreamId int32, srcControlChannel string, liveDestination string) ([]byte, error) {
+func TaggedReplicateRequestPacket(marshaller *SbeGoMarshaller, controlSessionId int64, correlationId int64, srcRecordingId int64, dstRecordingId int64, channelTagId int64, subscriptionTagId int64, srcControlStreamId int32, srcControlChannel string, liveDestination string) ([]byte, error) {
 	var request TaggedReplicateRequest
 	request.ControlSessionId = controlSessionId
 	request.CorrelationId = correlationId
@@ -700,14 +704,14 @@ func TaggedReplicateRequestPacket(marshaller *SbeGoMarshaller, rangeChecking boo
 	if err := header.Encode(marshaller, buffer); err != nil {
 		return nil, err
 	}
-	if err := request.Encode(marshaller, buffer, rangeChecking); err != nil {
+	if err := request.Encode(marshaller, buffer, rangeCheck); err != nil {
 		return nil, err
 	}
 
 	return buffer.Bytes(), nil
 }
 
-func ReplicateRequest2Packet(marshaller *SbeGoMarshaller, rangeChecking bool, controlSessionId int64, correlationId int64, srcRecordingId int64, dstRecordingId int64, stopPosition int64, channelTagId int64, srcControlStreamId int32, srcControlChannel string, liveDestination string, replicationChannel string) ([]byte, error) {
+func ReplicateRequest2Packet(marshaller *SbeGoMarshaller, controlSessionId int64, correlationId int64, srcRecordingId int64, dstRecordingId int64, stopPosition int64, channelTagId int64, srcControlStreamId int32, srcControlChannel string, liveDestination string, replicationChannel string) ([]byte, error) {
 	var request ReplicateRequest2
 	request.ControlSessionId = controlSessionId
 	request.CorrelationId = correlationId
@@ -726,14 +730,14 @@ func ReplicateRequest2Packet(marshaller *SbeGoMarshaller, rangeChecking bool, co
 	if err := header.Encode(marshaller, buffer); err != nil {
 		return nil, err
 	}
-	if err := request.Encode(marshaller, buffer, rangeChecking); err != nil {
+	if err := request.Encode(marshaller, buffer, rangeCheck); err != nil {
 		return nil, err
 	}
 
 	return buffer.Bytes(), nil
 }
 
-func PurgeRecordingRequestPacket(marshaller *SbeGoMarshaller, rangeChecking bool, controlSessionId int64, correlationId int64, recordingId int64) ([]byte, error) {
+func PurgeRecordingRequestPacket(marshaller *SbeGoMarshaller, controlSessionId int64, correlationId int64, recordingId int64) ([]byte, error) {
 	var request PurgeRecordingRequest
 	request.ControlSessionId = controlSessionId
 	request.CorrelationId = correlationId
@@ -745,7 +749,7 @@ func PurgeRecordingRequestPacket(marshaller *SbeGoMarshaller, rangeChecking bool
 	if err := header.Encode(marshaller, buffer); err != nil {
 		return nil, err
 	}
-	if err := request.Encode(marshaller, buffer, rangeChecking); err != nil {
+	if err := request.Encode(marshaller, buffer, rangeCheck); err != nil {
 		return nil, err
 	}
 

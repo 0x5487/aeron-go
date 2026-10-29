@@ -21,6 +21,10 @@ import (
 	"github.com/lirm/aeron-go/aeron/atomic"
 )
 
+// rangeCheck is passed to every generated Encode in this package: the cluster protocol is always range
+// checked, so a value outside its schema range is an error.
+const rangeCheck = true
+
 // Encoders for all cluster protocol packets
 //
 // Each of these functions creates a []byte suitable for sending over
@@ -36,7 +40,6 @@ import (
 
 func ServiceAckRequestPacket(
 	marshaller *SbeGoMarshaller,
-	rangeChecking bool,
 	logPosition int64,
 	timestamp int64,
 	ackID int64,
@@ -63,7 +66,7 @@ func ServiceAckRequestPacket(
 	if err := header.Encode(marshaller, buffer); err != nil {
 		return nil, err
 	}
-	if err := request.Encode(marshaller, buffer, rangeChecking); err != nil {
+	if err := request.Encode(marshaller, buffer, rangeCheck); err != nil {
 		return nil, err
 	}
 
@@ -72,7 +75,6 @@ func ServiceAckRequestPacket(
 
 func SnapshotMarkerPacket(
 	marshaller *SbeGoMarshaller,
-	rangeChecking bool,
 	typeId int64,
 	logPosition int64,
 	leadershipTermId int64,
@@ -101,7 +103,7 @@ func SnapshotMarkerPacket(
 	if err := header.Encode(marshaller, buffer); err != nil {
 		return nil, err
 	}
-	if err := request.Encode(marshaller, buffer, rangeChecking); err != nil {
+	if err := request.Encode(marshaller, buffer, rangeCheck); err != nil {
 		return nil, err
 	}
 	return buffer.Bytes(), nil
@@ -109,7 +111,6 @@ func SnapshotMarkerPacket(
 
 func ClientSessionPacket(
 	marshaller *SbeGoMarshaller,
-	rangeChecking bool,
 	clusterSessionId int64,
 	responseStreamId int32,
 	responseChannel []byte,
@@ -132,7 +133,7 @@ func ClientSessionPacket(
 	if err := header.Encode(marshaller, buffer); err != nil {
 		return nil, err
 	}
-	if err := request.Encode(marshaller, buffer, rangeChecking); err != nil {
+	if err := request.Encode(marshaller, buffer, rangeCheck); err != nil {
 		return nil, err
 	}
 	return buffer.Bytes(), nil
@@ -140,7 +141,6 @@ func ClientSessionPacket(
 
 func CloseSessionRequestPacket(
 	marshaller *SbeGoMarshaller,
-	rangeChecking bool,
 	clusterSessionId int64,
 ) ([]byte, error) {
 	request := CloseSession{
@@ -159,7 +159,7 @@ func CloseSessionRequestPacket(
 	if err := header.Encode(marshaller, buffer); err != nil {
 		return nil, err
 	}
-	if err := request.Encode(marshaller, buffer, rangeChecking); err != nil {
+	if err := request.Encode(marshaller, buffer, rangeCheck); err != nil {
 		return nil, err
 	}
 

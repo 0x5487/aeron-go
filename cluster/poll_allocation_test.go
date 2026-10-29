@@ -193,3 +193,31 @@ func TestSnapshotLoaderReadsBeginAndEndMarkers(t *testing.T) {
 	assert.False(t, loader.inSnapshot)
 	assert.Equal(t, appVersion, loader.appVersion)
 }
+
+// A session open whose cluster session id is outside its schema range is not applied: the decoder rejects it before
+// the agent sees it. onSessionOpen sets clusterTime first, so an applied event would leave the agent's clock at 500.
+func TestBoundedLogAdapterRejectsOutOfRangeSessionOpen(t *testing.T) {
+	event := codecs.SessionOpenEvent{
+		LeadershipTermId: 1,
+		CorrelationId:    2,
+		ClusterSessionId: math.MinInt64,
+		Timestamp:        500,
+		ResponseStreamId: 3,
+		ResponseChannel:  []byte("aeron:ipc"),
+	}
+	var body bytes.Buffer
+	// Encoded without the range check: the decoder under test must reject the event.
+	require.NoError(t, event.Encode(codecs.NewSbeGoMarshaller(), &body, false))
+
+	agent := &ClusteredServiceAgent{sessions: map[int64]ClientSession{}}
+	adapter := newBoundedLogAdapter(NewOptions())
+	adapter.agent = agent
+	adapter.image = &scriptedImage{queue: []scriptedFragment{{
+		buf:   clusterMessage(sessionOpenTemplateId, event.SbeBlockLength(), event.SbeSchemaVersion(), body.Bytes()),
+		flags: testFlagUnfragmented,
+	}}}
+
+	assert.Equal(t, 1, adapter.poll(math.MaxInt64))
+	assert.Zero(t, agent.clusterTime)
+	assert.Empty(t, agent.sessions)
+}
