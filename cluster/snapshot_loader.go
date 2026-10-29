@@ -31,16 +31,40 @@ type snapshotLoader struct {
 	inSnapshot bool
 	appVersion int32
 	timeUnit   codecs.ClusterTimeUnitEnum
-	err        error
+	// leadershipTermId is the term the snapshot was taken in, read from the last BEGIN marker. A client session does
+	// not carry one, so an entry that does not decode is reported with this term.
+	leadershipTermId int64
+	err              error
 	// fragmentHandler is loader.onFragment, bound once in newSnapshotLoader. Passing the method value to Poll on
 	// every round allocates a closure per round.
 	fragmentHandler term.FragmentHandler
 }
 
 func newSnapshotLoader(agent *ClusteredServiceAgent, img aeron.Image) *snapshotLoader {
-	loader := &snapshotLoader{agent: agent, img: img, marshaller: codecs.NewSbeGoMarshaller()}
+	loader := &snapshotLoader{
+		agent:            agent,
+		img:              img,
+		marshaller:       codecs.NewSbeGoMarshaller(),
+		leadershipTermId: NullValue,
+	}
 	loader.fragmentHandler = loader.onFragment
 	return loader
+}
+
+// undecodable records a fragment the loader cannot decode and ends the load. The caller that owns the starting
+// service stops it with the entry's one Error line: a snapshot the service cannot decode is a log entry it cannot
+// apply, and nothing after it can be trusted.
+func (loader *snapshotLoader) undecodable(
+	buffer *atomic.Buffer,
+	offset int32,
+	length int32,
+	header *logbuffer.Header,
+	templateId uint16,
+	leadershipTermId int64,
+	cause error,
+) {
+	loader.err = newUndecodableLogEntry(buffer, offset, length, header, templateId, leadershipTermId, cause)
+	loader.isDone = true
 }
 
 func (loader *snapshotLoader) poll() int {
@@ -56,7 +80,10 @@ func (loader *snapshotLoader) onFragment(
 	length int32,
 	header *logbuffer.Header,
 ) {
+	entryOffset, entryLength := offset, length
 	if length < SBEHeaderLength {
+		loader.undecodable(buffer, entryOffset, entryLength, header, 0, loader.leadershipTermId,
+			fmt.Errorf("fragment is %d bytes, shorter than the SBE header", length))
 		return
 	}
 	blockLength := buffer.GetUInt16(offset)
@@ -64,12 +91,15 @@ func (loader *snapshotLoader) onFragment(
 	schemaId := buffer.GetUInt16(offset + 4)
 	version := buffer.GetUInt16(offset + 6)
 	if schemaId != ClusterSchemaId {
-		logger.Errorf("SnapshotLoader: unexpected schemaId=%d templateId=%d blockLen=%d version=%d",
-			schemaId, templateId, blockLength, version)
+		loader.undecodable(buffer, entryOffset, entryLength, header, templateId, loader.leadershipTermId,
+			fmt.Errorf("unexpected schemaId=%d, want %d", schemaId, ClusterSchemaId))
 		return
 	}
 	offset += SBEHeaderLength
 	length -= SBEHeaderLength
+	if templateId == snapshotMarkerTemplateId && length >= 24 {
+		loader.leadershipTermId = buffer.GetInt64(offset + 16)
+	}
 
 	buf := &bytes.Buffer{}
 	buffer.WriteBytes(buf, offset, length)
@@ -78,8 +108,7 @@ func (loader *snapshotLoader) onFragment(
 	case snapshotMarkerTemplateId:
 		marker := &codecs.SnapshotMarker{}
 		if err := marker.Decode(loader.marshaller, buf, version, blockLength, rangeCheck); err != nil {
-			loader.err = err
-			loader.isDone = true
+			loader.undecodable(buffer, entryOffset, entryLength, header, templateId, loader.leadershipTermId, err)
 		} else if marker.TypeId != snapshotTypeId {
 			loader.err = fmt.Errorf("unexpected snapshot type: %d", marker.TypeId)
 			loader.isDone = true
@@ -107,8 +136,7 @@ func (loader *snapshotLoader) onFragment(
 	case clientSessionTemplateId:
 		s := codecs.ClientSession{}
 		if err := s.Decode(loader.marshaller, buf, version, blockLength, rangeCheck); err != nil {
-			loader.err = err
-			loader.isDone = true
+			loader.undecodable(buffer, entryOffset, entryLength, header, templateId, loader.leadershipTermId, err)
 		} else {
 			container, err := newContainerClientSession(
 				s.ClusterSessionId, s.ResponseStreamId, string(s.ResponseChannel), s.EncodedPrincipal, loader.agent)
@@ -120,6 +148,7 @@ func (loader *snapshotLoader) onFragment(
 			}
 		}
 	default:
-		logger.Debugf("SnapshotLoader: unknown templateId=%d at pos=%d", templateId, header.Position())
+		loader.undecodable(buffer, entryOffset, entryLength, header, templateId, loader.leadershipTermId,
+			fmt.Errorf("unexpected templateId=%d", templateId))
 	}
 }

@@ -53,10 +53,13 @@ it was made and where it was found (trading-poc experiments under `docs/labs/aer
   schema, such as an unknown `ControlResponse` code, was accepted; it is now an error for `ErrorListener`. A decode error
   ends the fragment: it is reported once, and the half-decoded value is not delivered to a listener and does not set a
   result. The cluster log adapter range-checks its manually decoded timer event, session close event and session message
-  header through the generated structs it reuses, so a null id or timestamp or an unknown close reason ends the fragment
-  before the agent applies it, without copying the message or allocating per message. A snapshot marker whose type is not
-  this service's ends the snapshot load, so the sessions after it are not added to the agent. Found in trading-poc
-  cloud-perf 118.
+  header through the generated structs it reuses, without copying the message or allocating per message. A cluster log
+  entry that does not decode stops the service: an out-of-range value, an unexpected schema or template, or a body too
+  short to read writes one Error line with the template id, log position, leadership term, cause and raw payload as hex,
+  then panics, so neither the entry nor anything after it is applied or read. A snapshot that does not decode stops the
+  start the same way, and any other snapshot loader error ends the start instead of being ignored. A snapshot marker
+  whose type is not this service's ends the snapshot load, so the sessions after it are not added to the agent. Found
+  in trading-poc cloud-perf 118.
 
 ### Added
 

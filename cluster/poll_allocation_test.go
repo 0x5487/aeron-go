@@ -61,10 +61,13 @@ const (
 	testFlagUnfragmented uint8 = 0x80 | 0x40
 )
 
-// fragmentHeader returns a log header whose frame carries the given flags.
+// fragmentHeader returns a log header whose frame carries the given flags. The frame length and term id give the header
+// the position 96, so a test can tell the header's position from the zero value of an unset header.
 func fragmentHeader(flags uint8) *logbuffer.Header {
 	frame := atomic.MakeBuffer(make([]byte, logbuffer.DataFrameHeader.Length))
 	logbuffer.FrameFlags(frame, 0, flags)
+	logbuffer.SetFrameLength(frame, 0, 64)
+	frame.PutInt32(logbuffer.DataFrameHeader.TermIDFieldOffset, 32)
 	return new(logbuffer.Header).Wrap(frame.Ptr(), frame.Capacity())
 }
 
@@ -216,9 +219,10 @@ func TestSnapshotLoaderReadsBeginAndEndMarkers(t *testing.T) {
 	assert.Equal(t, appVersion, loader.appVersion)
 }
 
-// A session open whose cluster session id is outside its schema range is not applied: the decoder rejects it before
+// A session open whose cluster session id is outside its schema range stops the service with one Error line before
 // the agent sees it. onSessionOpen sets clusterTime first, so an applied event would leave the agent's clock at 500.
 func TestBoundedLogAdapterRejectsOutOfRangeSessionOpen(t *testing.T) {
+	logs := captureErrorLogs(t)
 	event := codecs.SessionOpenEvent{
 		LeadershipTermId: 1,
 		CorrelationId:    2,
@@ -230,17 +234,17 @@ func TestBoundedLogAdapterRejectsOutOfRangeSessionOpen(t *testing.T) {
 	var body bytes.Buffer
 	// Encoded without the range check: the decoder under test must reject the event.
 	require.NoError(t, event.Encode(codecs.NewSbeGoMarshaller(), &body, false))
+	msg := clusterMessage(sessionOpenTemplateId, event.SbeBlockLength(), event.SbeSchemaVersion(), body.Bytes())
 
 	agent := &ClusteredServiceAgent{sessions: map[int64]ClientSession{}}
 	adapter := newBoundedLogAdapter(NewOptions())
 	adapter.agent = agent
 	adapter.image = &scriptedImage{queue: []scriptedFragment{{
-		buf:   clusterMessage(sessionOpenTemplateId, event.SbeBlockLength(), event.SbeSchemaVersion(), body.Bytes()),
-		flags: testFlagUnfragmented,
+		buf: msg, flags: testFlagUnfragmented,
 	}}}
 
-	require.NotPanics(t, func() { adapter.poll(math.MaxInt64) },
-		"an out-of-schema session open must be rejected before the agent applies it")
+	stopOf(t, func() { adapter.poll(math.MaxInt64) })
+	requireUndecodableEntry(t, logs, msg, sessionOpenTemplateId, 1)
 	assert.Zero(t, agent.clusterTime)
 	assert.Empty(t, agent.sessions)
 }

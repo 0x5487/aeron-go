@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"bytes"
+	"fmt"
 
 	"github.com/lirm/aeron-go/aeron"
 	"github.com/lirm/aeron-go/aeron/atomic"
@@ -41,7 +42,11 @@ func (adapter *serviceAdapter) onFragment(
 	length int32,
 	header *logbuffer.Header,
 ) {
+	entryOffset, entryLength := offset, length
 	if length < SBEHeaderLength {
+		stopOnUndecodableLogEntry(newUndecodableLogEntry(buffer, entryOffset, entryLength, header, 0,
+			adapter.agent.leadershipTermId(),
+			fmt.Errorf("message is %d bytes, shorter than the SBE header", length)))
 		return
 	}
 	blockLength := buffer.GetUInt16(offset)
@@ -49,8 +54,9 @@ func (adapter *serviceAdapter) onFragment(
 	schemaId := buffer.GetUInt16(offset + 4)
 	version := buffer.GetUInt16(offset + 6)
 	if schemaId != ClusterSchemaId {
-		logger.Errorf("serviceAdapter: unexpected schemaId=%d templateId=%d blockLen=%d version=%d",
-			schemaId, templateId, blockLength, version)
+		stopOnUndecodableLogEntry(newUndecodableLogEntry(buffer, entryOffset, entryLength, header, templateId,
+			adapter.agent.leadershipTermId(),
+			fmt.Errorf("unexpected schemaId=%d, want %d", schemaId, ClusterSchemaId)))
 		return
 	}
 	offset += SBEHeaderLength
@@ -62,19 +68,20 @@ func (adapter *serviceAdapter) onFragment(
 		buffer.WriteBytes(buf, offset, length)
 		joinLog := &codecs.JoinLog{}
 		if err := joinLog.Decode(adapter.marshaller, buf, version, blockLength, rangeCheck); err != nil {
-			logger.Errorf("serviceAdapter: join log decode error: %v", err)
-		} else {
-			adapter.agent.onJoinLog(
-				joinLog.LogPosition,
-				joinLog.MaxLogPosition,
-				joinLog.MemberId,
-				joinLog.LogSessionId,
-				joinLog.LogStreamId,
-				joinLog.IsStartup == codecs.BooleanType.TRUE,
-				Role(joinLog.Role),
-				string(joinLog.LogChannel),
-			)
+			stopOnUndecodableLogEntry(newUndecodableLogEntry(buffer, entryOffset, entryLength, header, templateId,
+				adapter.agent.leadershipTermId(), err))
+			return
 		}
+		adapter.agent.onJoinLog(
+			joinLog.LogPosition,
+			joinLog.MaxLogPosition,
+			joinLog.MemberId,
+			joinLog.LogSessionId,
+			joinLog.LogStreamId,
+			joinLog.IsStartup == codecs.BooleanType.TRUE,
+			Role(joinLog.Role),
+			string(joinLog.LogChannel),
+		)
 	case serviceTerminationPosTemplateId:
 		logPos := buffer.GetInt64(offset)
 		adapter.agent.onServiceTerminationPosition(logPos)

@@ -13,6 +13,7 @@
 package cluster
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -264,9 +265,23 @@ func (agent *ClusteredServiceAgent) loadSnapshot(recordingId int64) error {
 	defer closeSubscription(subscription)
 
 	img := agent.awaitImage(int32(replaySessionId), subscription)
+	return agent.loadSnapshotImage(img)
+}
+
+// loadSnapshotImage loads the snapshot the image replays into the agent. A fragment the loader cannot decode is a
+// corrupt log entry: the service cannot start from that snapshot, so it stops with the same one Error line as the log
+// adapter. Any other loader error (a marker of another type, an incomplete snapshot) stops the start with that error.
+func (agent *ClusteredServiceAgent) loadSnapshotImage(img aeron.Image) error {
 	loader := newSnapshotLoader(agent, img)
 	for !loader.isDone {
 		agent.opts.IdleStrategy.Idle(loader.poll())
+	}
+	if loader.err != nil {
+		var entry *undecodableLogEntry
+		if errors.As(loader.err, &entry) {
+			stopOnUndecodableLogEntry(entry)
+		}
+		return loader.err
 	}
 	if util.SemanticVersionMajor(uint32(agent.opts.AppVersion)) != util.SemanticVersionMajor(uint32(loader.appVersion)) {
 		panic(fmt.Errorf("incompatible app version: %v snapshot=%v",
@@ -709,6 +724,15 @@ func (agent *ClusteredServiceAgent) Idle(workCount int) {
 
 func (agent *ClusteredServiceAgent) LogPosition() int64 {
 	return agent.logPosition
+}
+
+// leadershipTermId is the term the service is currently in. An entry that does not carry a term of its own (the join
+// log) is reported with this term: the one the service was in when it read the entry.
+func (agent *ClusteredServiceAgent) leadershipTermId() int64 {
+	if agent.sessionMsgHdrBuffer == nil {
+		return NullValue
+	}
+	return agent.sessionMsgHdrBuffer.GetInt64(SBEHeaderLength)
 }
 
 func (agent *ClusteredServiceAgent) MemberId() int32 {

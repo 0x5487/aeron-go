@@ -14,6 +14,8 @@ package cluster
 
 import (
 	"bytes"
+	"fmt"
+
 	"github.com/lirm/aeron-go/aeron"
 	"github.com/lirm/aeron-go/aeron/atomic"
 	"github.com/lirm/aeron-go/aeron/logbuffer"
@@ -25,6 +27,13 @@ const (
 	beginFrag    uint8 = 0x80
 	endFrag      uint8 = 0x40
 	unfragmented uint8 = 0x80 | 0x40
+)
+
+// The manual reads of the timer event and the session close event follow their generated block layouts; these are the
+// shortest bodies those reads need. A shorter body would read outside the fragment, so it stops the service first.
+const (
+	timerEventBlockLength        = 24
+	sessionCloseEventBlockLength = 28
 )
 
 type boundedLogAdapter struct {
@@ -94,29 +103,40 @@ func (adapter *boundedLogAdapter) onMessage(
 	length int32,
 	header *logbuffer.Header,
 ) {
+	entryOffset, entryLength := offset, length
 	if length < SBEHeaderLength {
+		stopOnUndecodableLogEntry(newUndecodableLogEntry(buffer, entryOffset, entryLength, header, 0, NullValue,
+			fmt.Errorf("message is %d bytes, shorter than the SBE header", length)))
 		return
 	}
 	blockLength := buffer.GetUInt16(offset)
 	templateId := buffer.GetUInt16(offset + 2)
 	schemaId := buffer.GetUInt16(offset + 4)
 	version := buffer.GetUInt16(offset + 6)
-	if schemaId != ClusterSchemaId {
-		logger.Errorf("BoundedLogAdaptor - unexpected schemaId=%d templateId=%d blockLen=%d version=%d",
-			schemaId, templateId, blockLength, version)
-		return
-	}
 	offset += SBEHeaderLength
 	length -= SBEHeaderLength
+	leadershipTermId := leadershipTermIdFrom(buffer, offset, length)
+	if schemaId != ClusterSchemaId {
+		stopOnUndecodableLogEntry(newUndecodableLogEntry(buffer, entryOffset, entryLength, header, templateId,
+			leadershipTermId, fmt.Errorf("unexpected schemaId=%d, want %d", schemaId, ClusterSchemaId)))
+		return
+	}
 
 	switch templateId {
 	case timerEventTemplateId:
+		if length < timerEventBlockLength {
+			stopOnUndecodableLogEntry(newUndecodableLogEntry(buffer, entryOffset, entryLength, header, templateId,
+				leadershipTermId, fmt.Errorf("timer event body is %d bytes, shorter than %d",
+					length, timerEventBlockLength)))
+			return
+		}
 		event := &adapter.timerEvent
 		event.LeadershipTermId = buffer.GetInt64(offset)
 		event.CorrelationId = buffer.GetInt64(offset + 8)
 		event.Timestamp = buffer.GetInt64(offset + 16)
 		if err := event.RangeCheck(version, event.SbeSchemaVersion()); err != nil {
-			logger.Errorf("boundedLogAdapter: timer event decode error: %v", err)
+			stopOnUndecodableLogEntry(newUndecodableLogEntry(buffer, entryOffset, entryLength, header, templateId,
+				leadershipTermId, err))
 			return
 		}
 		adapter.agent.onTimerEvent(header.Position(), event.CorrelationId, event.Timestamp)
@@ -129,7 +149,8 @@ func (adapter *boundedLogAdapter) onMessage(
 			blockLength,
 			rangeCheck,
 		); err != nil {
-			logger.Errorf("boundedLogAdapter: session open decode error: %v", err)
+			stopOnUndecodableLogEntry(newUndecodableLogEntry(buffer, entryOffset, entryLength, header, templateId,
+				leadershipTermId, err))
 			return
 		}
 
@@ -146,13 +167,20 @@ func (adapter *boundedLogAdapter) onMessage(
 			panic("boundedLogAdapter: session open error: " + err.Error())
 		}
 	case sessionCloseTemplateId:
+		if length < sessionCloseEventBlockLength {
+			stopOnUndecodableLogEntry(newUndecodableLogEntry(buffer, entryOffset, entryLength, header, templateId,
+				leadershipTermId, fmt.Errorf("session close body is %d bytes, shorter than %d",
+					length, sessionCloseEventBlockLength)))
+			return
+		}
 		event := &adapter.sessionCloseEvent
 		event.LeadershipTermId = buffer.GetInt64(offset)
 		event.ClusterSessionId = buffer.GetInt64(offset + 8)
 		event.Timestamp = buffer.GetInt64(offset + 16)
 		event.CloseReason = codecs.CloseReasonEnum(buffer.GetInt32(offset + 24))
 		if err := event.RangeCheck(version, event.SbeSchemaVersion()); err != nil {
-			logger.Errorf("boundedLogAdapter: session close decode error: %v", err)
+			stopOnUndecodableLogEntry(newUndecodableLogEntry(buffer, entryOffset, entryLength, header, templateId,
+				leadershipTermId, err))
 			return
 		}
 		adapter.agent.onSessionClose(
@@ -166,30 +194,35 @@ func (adapter *boundedLogAdapter) onMessage(
 		e := codecs.ClusterActionRequest{}
 		buf := toByteBuffer(buffer, offset, length)
 		if err := e.Decode(adapter.marshaller, buf, version, blockLength, rangeCheck); err != nil {
-			logger.Errorf("boundedLogAdapter: cluster action request decode error: %v", err)
-		} else {
-			adapter.agent.onServiceAction(e.LeadershipTermId, e.LogPosition, e.Timestamp, e.Action)
+			stopOnUndecodableLogEntry(newUndecodableLogEntry(buffer, entryOffset, entryLength, header, templateId,
+				leadershipTermId, err))
+			return
 		}
+		adapter.agent.onServiceAction(e.LeadershipTermId, e.LogPosition, e.Timestamp, e.Action)
 	case newLeadershipTermTemplateId:
 		e := codecs.NewLeadershipTermEvent{}
 		buf := toByteBuffer(buffer, offset, length)
 		if err := e.Decode(adapter.marshaller, buf, version, blockLength, rangeCheck); err != nil {
-			logger.Errorf("boundedLogAdapter: new leadership term decode error: %v", err)
-		} else {
-			adapter.agent.onNewLeadershipTermEvent(e.LeadershipTermId, e.LogPosition, e.Timestamp,
-				e.TermBaseLogPosition, e.LeaderMemberId, e.LogSessionId, e.TimeUnit, e.AppVersion)
+			stopOnUndecodableLogEntry(newUndecodableLogEntry(buffer, entryOffset, entryLength, header, templateId,
+				leadershipTermId, err))
+			return
 		}
+		adapter.agent.onNewLeadershipTermEvent(e.LeadershipTermId, e.LogPosition, e.Timestamp,
+			e.TermBaseLogPosition, e.LeaderMemberId, e.LogSessionId, e.TimeUnit, e.AppVersion)
 	case membershipChangeTemplateId:
 		e := codecs.MembershipChangeEvent{}
 		buf := toByteBuffer(buffer, offset, length)
 		if err := e.Decode(adapter.marshaller, buf, version, blockLength, rangeCheck); err != nil {
-			logger.Errorf("boundedLogAdapter: membership change event decode error: %v", err)
-		} else {
-			adapter.agent.onMembershipChange(e.LogPosition, e.Timestamp, e.ChangeType, e.MemberId)
+			stopOnUndecodableLogEntry(newUndecodableLogEntry(buffer, entryOffset, entryLength, header, templateId,
+				leadershipTermId, err))
+			return
 		}
+		adapter.agent.onMembershipChange(e.LogPosition, e.Timestamp, e.ChangeType, e.MemberId)
 	case SessionMessageHeaderTemplateId:
 		if length < SessionMessageHeaderLength {
-			logger.Errorf("received invalid session message - length: %d", length)
+			stopOnUndecodableLogEntry(newUndecodableLogEntry(buffer, entryOffset, entryLength, header, templateId,
+				leadershipTermId, fmt.Errorf("session message body is %d bytes, shorter than %d",
+					length, SessionMessageHeaderLength)))
 			return
 		}
 		event := &adapter.sessionMessageHeader
@@ -197,7 +230,8 @@ func (adapter *boundedLogAdapter) onMessage(
 		event.ClusterSessionId = buffer.GetInt64(offset + 8)
 		event.Timestamp = buffer.GetInt64(offset + 16)
 		if err := event.RangeCheck(version, event.SbeSchemaVersion()); err != nil {
-			logger.Errorf("boundedLogAdapter: session message header decode error: %v", err)
+			stopOnUndecodableLogEntry(newUndecodableLogEntry(buffer, entryOffset, entryLength, header, templateId,
+				leadershipTermId, err))
 			return
 		}
 		adapter.agent.onSessionMessage(
@@ -210,7 +244,8 @@ func (adapter *boundedLogAdapter) onMessage(
 			header,
 		)
 	default:
-		logger.Debugf("BoundedLogAdaptor: unexpected templateId=%d at pos=%d", templateId, header.Position())
+		stopOnUndecodableLogEntry(newUndecodableLogEntry(buffer, entryOffset, entryLength, header, templateId,
+			leadershipTermId, fmt.Errorf("unexpected templateId=%d", templateId)))
 	}
 }
 
